@@ -21,19 +21,21 @@ static vcodec_status_t vcodec_enc_rle(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_
 static vcodec_status_t vcodec_enc_write_elias_delta_code(vcodec_enc_ctx_t *p_ctx, unsigned int value);
 
 /**
+ * Write non-negative integer using Golomb-Rice code with divider 2^m.
+ */
+static vcodec_status_t vcodec_enc_write_golomb_rice_code(vcodec_enc_ctx_t *p_ctx, unsigned int value, int m);
+
+/**
  * Encode difference between consecutive bytes within a row using Elias delta code.
- *
- * 1. Write n in binary. The leftmost (most-significant) bit will be a 1.
- * 2. Count the bits, remove the leftmost bit of n, and prepend the count, in binary,
- *    to what is left of n after its leftmost bit has been removed.
- * 3. Subtract 1 from the count of step 2 and prepend that number of zeros to the code.
  */
 static vcodec_status_t vcodec_enc_dpcm_delta(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_buffer, size_t size);
 
 /**
- * DPCM with context-less MED predictor encoded using Elias delta code.
+ * DPCM using MED predictor encoded with Elias delta code.
  */
 static vcodec_status_t vcodec_enc_dpcm_med_predictor_delta(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line);
+
+static vcodec_status_t vcodec_enc_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line);
 
 static vcodec_status_t vcodec_bit_buffer_write(vcodec_enc_ctx_t *p_ctx, uint32_t bits, int num_bits);
 
@@ -72,7 +74,7 @@ vcodec_status_t vcodec_enc_process_frame(vcodec_enc_ctx_t *p_ctx) {
         //status = vcodec_enc_rle(p_ctx, p_ctx->p_buffer, read_size);
         //status = p_ctx->write(p_ctx->p_buffer, read_size, p_ctx->io_ctx);
         //status = vcodec_enc_dpcm_delta(p_ctx, p_ctx->p_buffer, read_size);
-        status = vcodec_enc_dpcm_med_predictor_delta(p_ctx, p_ctx->p_buffer, prev_line);
+        status = vcodec_enc_dpcm_med_predictor_golomb(p_ctx, p_ctx->p_buffer, prev_line);
         if (status != VCODEC_STATUS_OK) {
             return status;
         }
@@ -206,4 +208,42 @@ static vcodec_status_t vcodec_enc_dpcm_med_predictor_delta(vcodec_enc_ctx_t *p_c
         }
     }
     return status;
+}
+
+static vcodec_status_t vcodec_enc_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line) {
+    vcodec_status_t status = vcodec_enc_write_elias_delta_code(p_ctx, p_current_line[0]);
+    static int golomb_param = 2;
+    for (int i = 1; i < p_ctx->width; i++) {
+        const int A = p_current_line[i - 1];
+        const int B = p_prev_line[i];
+        const int C = p_prev_line[i - 1];
+        const int predicted_value = (C >= MAX(A, B)) ? MIN(A, B) : (C <= MIN(A, B)) ? MAX(A, B) : (A + B - C);
+        const int diff = p_current_line[i] - predicted_value;
+        const unsigned int encoded_value = (diff <= 0 ? -diff * 2 : diff * 2 - 1) + 1;
+        //printf("%d ", encoded_value);
+        vcodec_status_t status = vcodec_enc_write_golomb_rice_code(p_ctx, encoded_value, golomb_param);
+        if (VCODEC_STATUS_OK != status) {
+            return status;
+        }
+    }
+    return status;
+}
+
+static vcodec_status_t vcodec_enc_write_golomb_rice_code(vcodec_enc_ctx_t *p_ctx, unsigned int value, int m) {
+    const int max_q = 20;
+    const int q = value >> m;
+    uint32_t unary_zeroes = 0;
+    if (q < max_q) {
+        vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, unary_zeroes, q);
+        if (VCODEC_STATUS_OK != status) {
+            return status;
+        }
+        return vcodec_bit_buffer_write(p_ctx, (1 << m) | (value & ((1 << m) - 1)), m + 1);
+    } else {
+        vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, unary_zeroes, max_q);
+        if (VCODEC_STATUS_OK != status) {
+            return status;
+        }
+        return vcodec_bit_buffer_write(p_ctx, (1 << m) | value, 10);
+    }
 }
