@@ -212,7 +212,7 @@ static vcodec_status_t vcodec_enc_dpcm_med_predictor_delta(vcodec_enc_ctx_t *p_c
 
 static vcodec_status_t vcodec_enc_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line) {
     vcodec_status_t status = vcodec_enc_write_elias_delta_code(p_ctx, p_current_line[0]);
-    static int golomb_param = 2;
+    int prev_value = 0;
     for (int i = 1; i < p_ctx->width; i++) {
         const int A = p_current_line[i - 1];
         const int B = p_prev_line[i];
@@ -220,8 +220,9 @@ static vcodec_status_t vcodec_enc_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_
         const int predicted_value = (C >= MAX(A, B)) ? MIN(A, B) : (C <= MIN(A, B)) ? MAX(A, B) : (A + B - C);
         const int diff = p_current_line[i] - predicted_value;
         const unsigned int encoded_value = (diff <= 0 ? -diff * 2 : diff * 2 - 1) + 1;
-        //printf("%d ", encoded_value);
-        vcodec_status_t status = vcodec_enc_write_golomb_rice_code(p_ctx, encoded_value, golomb_param);
+        const int golomb_param = sizeof(int) * 8 - __builtin_clz(MAX(1, prev_value >> 1)); // integral approx. log2(prev*ln2)
+        prev_value = encoded_value;
+        vcodec_status_t status = vcodec_enc_write_golomb_rice_code(p_ctx, encoded_value, MAX(golomb_param, 1));
         if (VCODEC_STATUS_OK != status) {
             return status;
         }
