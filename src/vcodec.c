@@ -43,7 +43,7 @@ vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
         return VCODEC_STATUS_INVAL;
     }
-    p_ctx->buffer_size = p_ctx->width * 3;
+    p_ctx->buffer_size = p_ctx->width * p_ctx->height;
     p_ctx->p_buffer = p_ctx->alloc(p_ctx->buffer_size);
     if (NULL == p_ctx->p_buffer) {
         return VCODEC_STATUS_NOMEM;
@@ -159,7 +159,8 @@ static vcodec_status_t vcodec_bit_buffer_write(vcodec_enc_ctx_t *p_ctx, uint32_t
     while (num_bits > 0) {
         const int to_write = MIN(num_bits, sizeof(p_ctx->bit_buffer) * 8 - p_ctx->bit_buffer_index);
         num_bits -= to_write;
-        p_ctx->bit_buffer |= (bits & to_write) << p_ctx->bit_buffer_index;
+        const uint32_t mask = 32 == to_write ? 0xFFFFFFFF : (1 << to_write) - 1;
+        p_ctx->bit_buffer |= (bits & mask) << p_ctx->bit_buffer_index;
         p_ctx->bit_buffer_index += to_write;
         bits >> to_write;
         if (sizeof(p_ctx->bit_buffer) * 8 == p_ctx->bit_buffer_index) {
@@ -176,8 +177,8 @@ static vcodec_status_t vcodec_bit_buffer_write(vcodec_enc_ctx_t *p_ctx, uint32_t
 }
 
 static vcodec_status_t vcodec_enc_write_elias_delta_code(vcodec_enc_ctx_t *p_ctx, unsigned int value) {
-    const int num_bits  = sizeof(int) * 8 - __builtin_clz(value);
-    const int num_bits2 = sizeof(int) * 8 - __builtin_clz(num_bits);
+    const int num_bits  = sizeof(int) * 8 - 1 - __builtin_clz(value);
+    const int num_bits2 = sizeof(int) * 8 - 1 - __builtin_clz(num_bits);
     const int zero_prefix = 0;
     vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, zero_prefix, num_bits2 - 1);
     if (VCODEC_STATUS_OK != status) {
@@ -193,7 +194,7 @@ static vcodec_status_t vcodec_enc_write_elias_delta_code(vcodec_enc_ctx_t *p_ctx
 }
 
 static vcodec_status_t vcodec_enc_dpcm_med_predictor_delta(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line) {
-    vcodec_status_t status = vcodec_enc_write_elias_delta_code(p_ctx, p_current_line[0]);
+    vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, p_current_line[0], 8);
     for (int i = 1; i < p_ctx->width; i++) {
         const int A = p_current_line[i - 1];
         const int B = p_prev_line[i];
@@ -211,18 +212,38 @@ static vcodec_status_t vcodec_enc_dpcm_med_predictor_delta(vcodec_enc_ctx_t *p_c
 }
 
 static vcodec_status_t vcodec_enc_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line) {
-    vcodec_status_t status = vcodec_enc_write_elias_delta_code(p_ctx, p_current_line[0]);
+    vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, p_current_line[0], 8);
     int prev_value = 0;
+    int rle_runs = 0;
+    int min_rle_len = 4;
     for (int i = 1; i < p_ctx->width; i++) {
         const int A = p_current_line[i - 1];
         const int B = p_prev_line[i];
         const int C = p_prev_line[i - 1];
         const int predicted_value = (C >= MAX(A, B)) ? MIN(A, B) : (C <= MIN(A, B)) ? MAX(A, B) : (A + B - C);
         const int diff = p_current_line[i] - predicted_value;
-        const unsigned int encoded_value = (diff <= 0 ? -diff * 2 : diff * 2 - 1) + 1;
-        const int golomb_param = sizeof(int) * 8 - __builtin_clz(MAX(1, prev_value >> 1)); // integral approx. log2(prev*ln2)
+        const unsigned int encoded_value = (diff <= 0 ? -diff * 2 : diff * 2 - 1);
+        rle_runs++;
+        const int golomb_param = sizeof(int) * 8 - 1 - __builtin_clz(prev_value + 1);
+        if (prev_value != encoded_value) {
+            if (rle_runs >= min_rle_len) {
+                vcodec_status_t status = vcodec_enc_write_golomb_rice_code(p_ctx, rle_runs - min_rle_len, 9);
+                if (VCODEC_STATUS_OK != status) {
+                    return status;
+                }
+            }
+            rle_runs = 0;
+        }
         prev_value = encoded_value;
-        vcodec_status_t status = vcodec_enc_write_golomb_rice_code(p_ctx, encoded_value, MAX(golomb_param, 1));
+        if (rle_runs < min_rle_len) {
+            vcodec_status_t status = vcodec_enc_write_golomb_rice_code(p_ctx, encoded_value, MAX(golomb_param, 1));
+            if (VCODEC_STATUS_OK != status) {
+                return status;
+            }
+        }
+    }
+    if (rle_runs >= min_rle_len) {
+        vcodec_status_t status = vcodec_enc_write_golomb_rice_code(p_ctx, rle_runs - min_rle_len, 9);
         if (VCODEC_STATUS_OK != status) {
             return status;
         }
@@ -245,6 +266,6 @@ static vcodec_status_t vcodec_enc_write_golomb_rice_code(vcodec_enc_ctx_t *p_ctx
         if (VCODEC_STATUS_OK != status) {
             return status;
         }
-        return vcodec_bit_buffer_write(p_ctx, (1 << m) | value, 10);
+        return vcodec_bit_buffer_write(p_ctx, (1 << m) | value, 9);
     }
 }
