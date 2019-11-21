@@ -117,7 +117,7 @@ static void print_vcodec_stats(const vcodec_enc_ctx_t *p_ctx, clock_t diff) {
     avg_fps += ((diff * 1000) / CLOCKS_PER_SEC);
     total_time += diff;
     if (cnt % 100 == 0) {
-        printf("Compressed size %luM, ratio %f%%, avg fps %fms, total time %ds\n", p_io_ctx->current_frame_size >> 20,
+        printf("Compressed size %luM, ratio %f%%, avg fps %fms, total time %lus\n", p_io_ctx->current_frame_size >> 20,
                 ((float)p_io_ctx->current_frame_size / total_size) * 100, avg_fps / cnt, total_time / CLOCKS_PER_SEC);
     }
 }
