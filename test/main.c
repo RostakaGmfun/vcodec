@@ -16,9 +16,7 @@ typedef struct {
 } pgm_file_t;
 
 typedef struct {
-    uint8_t *p_data;
     uint32_t data_size;
-    uint32_t offset;
     uint64_t current_frame_size;
     FILE    *out_file;
     uint32_t out_size;
@@ -89,15 +87,6 @@ static vcodec_status_t vcodec_write(const uint8_t *p_data, uint32_t size, void *
     return VCODEC_STATUS_OK;
 }
 
-static vcodec_status_t vcodec_read(uint8_t *p_data, uint32_t *p_size, void *ctx) {
-    io_ctx_t *p_io_ctx = ctx;
-    const uint32_t to_copy = MIN(*p_size, p_io_ctx->data_size - p_io_ctx->offset);
-    memcpy(p_data, p_io_ctx->p_data + p_io_ctx->offset, to_copy);
-    *p_size = to_copy;
-    p_io_ctx->offset += to_copy;
-    return VCODEC_STATUS_OK;
-}
-
 static void *vcodec_alloc(size_t size) {
     return malloc(size);
 }
@@ -131,7 +120,6 @@ int main(int argc, char **argv) {
         .width  = 0,
         .height = 0,
         .write  = vcodec_write,
-        .read   = vcodec_read,
         .alloc  = vcodec_alloc,
         .free   = vcodec_free,
         .io_ctx = &io_ctx,
@@ -159,7 +147,7 @@ int main(int argc, char **argv) {
         if (0 == vcodec_enc_ctx.width) {
             vcodec_enc_ctx.width = pgm_file.width;
             vcodec_enc_ctx.height = pgm_file.height;
-            ret = vcodec_enc_init(&vcodec_enc_ctx);
+            ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_MED_GR);
             if (ret != VCODEC_STATUS_OK) {
                 fprintf(stderr, "Failed to initialize vcodec %d for %dx%d\n", ret, vcodec_enc_ctx.width, vcodec_enc_ctx.height);
                 free(pgm_file.p_data);
@@ -175,12 +163,10 @@ int main(int argc, char **argv) {
             printf("vcodec initialized for %dx%d\n", vcodec_enc_ctx.width, vcodec_enc_ctx.height);
         }
 
-        io_ctx.p_data = pgm_file.p_data;
         io_ctx.data_size = pgm_file.width * pgm_file.height;
-        io_ctx.offset = 0;
 
         const clock_t start_time = clock();
-        ret = vcodec_enc_process_frame(&vcodec_enc_ctx);
+        ret = vcodec_enc_ctx.process_frame(&vcodec_enc_ctx, pgm_file.p_data);
         const clock_t end_time = clock();
 
         if (VCODEC_STATUS_OK != ret) {
@@ -192,6 +178,6 @@ int main(int argc, char **argv) {
         num_files++;
     }
 
-    vcodec_enc_deinit(&vcodec_enc_ctx);
+    vcodec_enc_ctx.deinit(&vcodec_enc_ctx);
     return 0;
 }
