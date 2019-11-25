@@ -44,6 +44,7 @@ typedef struct vcodec_enc_ctx {
     vcodec_reset_t reset;
     vcodec_deinit_t deinit;
     vcodec_type_t encoder_type;
+    void *encoder_ctx;
 } vcodec_enc_ctx_t;
 
 vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type);

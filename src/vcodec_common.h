@@ -24,4 +24,8 @@ vcodec_status_t vcodec_med_gr_init(vcodec_enc_ctx_t *p_ctx);
 
 vcodec_status_t vcodec_inter_init(vcodec_enc_ctx_t *p_ctx);
 
+vcodec_status_t vcodec_med_gr_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line);
+
+vcodec_status_t vcodec_med_gr_write_golomb_rice_code(vcodec_enc_ctx_t *p_ctx, unsigned int value, int m);
+
 #endif // _VCODEC_COMMON_H_

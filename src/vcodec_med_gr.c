@@ -9,19 +9,11 @@ static vcodec_status_t vcodec_med_gr_reset(vcodec_enc_ctx_t *p_ctx);
 
 static vcodec_status_t vcodec_med_gr_deinit(vcodec_enc_ctx_t *p_ctx);
 
-
-/**
- * Write non-negative integer using Golomb-Rice code with divider 2^m.
- */
-static vcodec_status_t vcodec_med_gr_write_golomb_rice_code(vcodec_enc_ctx_t *p_ctx, unsigned int value, int m);
-
-static vcodec_status_t vcodec_med_gr_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line);
-
 vcodec_status_t vcodec_med_gr_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
         return VCODEC_STATUS_INVAL;
     }
-    p_ctx->buffer_size = p_ctx->width * p_ctx->height;
+    p_ctx->buffer_size = p_ctx->width;
     p_ctx->p_buffer = p_ctx->alloc(p_ctx->buffer_size);
     if (NULL == p_ctx->p_buffer) {
         return VCODEC_STATUS_NOMEM;
@@ -60,10 +52,9 @@ static vcodec_status_t vcodec_med_gr_deinit(vcodec_enc_ctx_t *p_ctx) {
     return VCODEC_STATUS_OK;
 }
 
-static vcodec_status_t vcodec_med_gr_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line) {
+vcodec_status_t vcodec_med_gr_dpcm_med_predictor_golomb(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_current_line, const uint8_t *p_prev_line) {
     vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, p_current_line[0], 8);
     int prev_value = 0;
-    int min_rle_len = 4;
     for (int i = 1; i < p_ctx->width; i++) {
         const int A = p_current_line[i - 1];
         const int B = p_prev_line[i];
@@ -99,7 +90,7 @@ static vcodec_status_t vcodec_med_gr_dpcm_med_predictor_golomb(vcodec_enc_ctx_t 
     return status;
 }
 
-static vcodec_status_t vcodec_med_gr_write_golomb_rice_code(vcodec_enc_ctx_t *p_ctx, unsigned int value, int m) {
+vcodec_status_t vcodec_med_gr_write_golomb_rice_code(vcodec_enc_ctx_t *p_ctx, unsigned int value, int m) {
     const int max_q = 9;
     const int q = value >> m;
     uint32_t unary_zeroes = 0;

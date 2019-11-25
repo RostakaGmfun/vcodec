@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
         if (0 == vcodec_enc_ctx.width) {
             vcodec_enc_ctx.width = pgm_file.width;
             vcodec_enc_ctx.height = pgm_file.height;
-            ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_MED_GR);
+            ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_INTER);
             if (ret != VCODEC_STATUS_OK) {
                 fprintf(stderr, "Failed to initialize vcodec %d for %dx%d\n", ret, vcodec_enc_ctx.width, vcodec_enc_ctx.height);
                 free(pgm_file.p_data);
