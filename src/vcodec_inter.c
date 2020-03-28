@@ -6,11 +6,13 @@
 #include <limits.h>
 
 #define INTER_BLOCK_SIZE 16
-#define INTER_MAX_BLOCK_MSE INTER_BLOCK_SIZE*INTER_BLOCK_SIZE*400
+#define INTER_MAX_BLOCK_MSE INTER_BLOCK_SIZE*INTER_BLOCK_SIZE*64
 #define INTER_GOP 24
-#define INTER_MIN_MATCHED_BLOCKS (256)
 
-#define INTER_MAX_BLOCK_DISPLACEMENT (32)
+#define INTER_MAX_BLOCK_DISPLACEMENT 30
+
+#define INTER_MIN_RLE_LEN 2
+#define INTER_MAX_GR_PARAM 9
 
 typedef struct {
     int gop;
@@ -28,11 +30,15 @@ static vcodec_status_t vcodec_inter_process_mid_frame(vcodec_enc_ctx_t *p_ctx, c
 
 static int vcodec_inter_compute_mse(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y);
 
-static bool vcodec_inter_find_matching_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int *p_mse, int *p_mx, int *p_my);
-static vcodec_status_t vcodec_inter_write_matched_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int mse, int mx, int my);
+static bool vcodec_inter_find_matching_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int *p_mx, int *p_my);
+static vcodec_status_t vcodec_inter_write_matched_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int mx, int my);
 static vcodec_status_t vcodec_inter_write_unmatched_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block);
 
 static int vcodec_int_sqrt(int val);
+
+static int vcodec_inter_estimate_gr_param_for_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y);
+
+static int vcodec_write_runlen(vcodec_enc_ctx_t *p_ctx, int runlen);
 
 vcodec_status_t vcodec_inter_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
@@ -73,7 +79,7 @@ static vcodec_status_t vcodec_inter_process_frame(vcodec_enc_ctx_t *p_ctx, const
         if (-1 != p_encoder_ctx->prev_num_matched_blocks && (p_encoder_ctx->prev_num_matched_blocks * 10) / p_encoder_ctx->num_matched_blocks > 15) {
             reset_needed = true;
         }
-        if (p_encoder_ctx->num_matched_blocks < total_blocks / 2) {
+        if (p_encoder_ctx->num_matched_blocks < total_blocks / 3) {
             reset_needed = true;
         }
         if (reset_needed) {
@@ -123,12 +129,11 @@ static vcodec_status_t vcodec_inter_process_mid_frame(vcodec_enc_ctx_t *p_ctx, c
         for (int j = 0; j < x_blocks; j++) {
             int mx = 0;
             int my = 0;
-            int mse = 0;
             const uint8_t *p_block = p_row + j * INTER_BLOCK_SIZE;
-            const bool match_found = vcodec_inter_find_matching_block(p_ctx, p_block, j, i, &mse, &mx, &my);
+            const bool match_found = vcodec_inter_find_matching_block(p_ctx, p_block, j, i, &mx, &my);
             if (match_found) {
                 p_encoder_ctx->num_matched_blocks++;
-                status = vcodec_inter_write_matched_block(p_ctx, p_block, j, i, mse, mx, my);
+                status = vcodec_inter_write_matched_block(p_ctx, p_block, j, i, mx, my);
             } else {
                 status = vcodec_inter_write_unmatched_block(p_ctx, p_block);
             }
@@ -156,51 +161,58 @@ static int vcodec_inter_compute_mse(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_bl
     return mse;
 }
 
-static bool vcodec_inter_find_matching_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int *p_mse, int *p_mx, int *p_my) {
+static bool vcodec_inter_find_matching_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int *p_mx, int *p_my) {
     bool match_found = true;
 
-    *p_mse = INT_MAX;
+    int min_mse = INT_MAX;
     for (int i = MAX(0, x * INTER_BLOCK_SIZE - INTER_MAX_BLOCK_DISPLACEMENT); i < MIN(x * INTER_BLOCK_SIZE + INTER_MAX_BLOCK_DISPLACEMENT, p_ctx->width); i++) {
         for (int j = MAX(0, y * INTER_BLOCK_SIZE - INTER_MAX_BLOCK_DISPLACEMENT); j < MIN(y * INTER_BLOCK_SIZE + INTER_MAX_BLOCK_DISPLACEMENT, p_ctx->height); j++) {
             const int mse = vcodec_inter_compute_mse(p_ctx, p_block, i, j);
-            if (mse < *p_mse) {
-                *p_mse = mse;
+            if (mse < min_mse) {
                 *p_mx = i - x * INTER_BLOCK_SIZE;
                 *p_my = j - y * INTER_BLOCK_SIZE;
-            }
-            if (mse < INTER_MAX_BLOCK_MSE / (INTER_BLOCK_SIZE * INTER_BLOCK_SIZE)) {
-                goto out;
+                min_mse = mse;
+                if (mse < INTER_MAX_BLOCK_MSE / (INTER_BLOCK_SIZE * INTER_BLOCK_SIZE)) {
+                    goto out;
+                }
             }
         }
     }
 
  out:
-    if (*p_mse < INTER_MAX_BLOCK_MSE) {
+    if (min_mse < INTER_MAX_BLOCK_MSE) {
+        //printf("%d ", min_mse);
+        uint8_t *p_prev_block = p_ctx->p_buffer + ((x * INTER_BLOCK_SIZE) + *p_mx) * p_ctx->width + ((y * INTER_BLOCK_SIZE) + *p_my);
+        for (int i = 0; i < INTER_BLOCK_SIZE; i++) {
+            for (int j = 0; j < INTER_BLOCK_SIZE; j++) {
+                p_prev_block[i * INTER_BLOCK_SIZE + j] = p_block[i * INTER_BLOCK_SIZE + j];
+            }
+        }
         return true;
     }
     return false;
 }
 
-static vcodec_status_t vcodec_inter_write_matched_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int mse, int mx, int my) {
+static vcodec_status_t vcodec_inter_write_matched_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y, int mx, int my) {
     const uint8_t *p_prev_block = p_ctx->p_buffer + x * p_ctx->width * INTER_BLOCK_SIZE + y * INTER_BLOCK_SIZE;
 
     int block_len = 0;
 
     vcodec_status_t status = VCODEC_STATUS_OK;
-    status = vcodec_med_gr_write_golomb_rice_code(p_ctx, mx, 1);
+    const int encoded_mx = mx >= 0 ? mx * 2 : (-mx * 2 + 1);
+    status = vcodec_med_gr_write_golomb_rice_code(p_ctx, encoded_mx, 1);
     if (status != VCODEC_STATUS_OK) {
         return status;
     }
-    block_len += mx / 2 + 1 + 1;
-    status = vcodec_med_gr_write_golomb_rice_code(p_ctx, my, 1);
+    block_len += encoded_mx / 2 + 1 + 1;
+    const int encoded_my = my >= 0 ? my * 2 : (-my * 2 + 1);
+    status = vcodec_med_gr_write_golomb_rice_code(p_ctx, encoded_my, 1);
     if (status != VCODEC_STATUS_OK) {
         return status;
     }
-    block_len += my / 2 + 1 + 1;
+    block_len += encoded_my / 2 + 1 + 1;
 
-    const int mean = vcodec_int_sqrt(mse / (INTER_BLOCK_SIZE * INTER_BLOCK_SIZE)) * 2;
-
-    const int golomb_rice_param = sizeof(int) * 8 - 1 - __builtin_clz(mean + (0 == mean));
+    const int golomb_rice_param = vcodec_inter_estimate_gr_param_for_block(p_ctx, p_block, x, y);
 
     status = vcodec_med_gr_write_golomb_rice_code(p_ctx, golomb_rice_param, 1);
     if (status != VCODEC_STATUS_OK) {
@@ -209,48 +221,53 @@ static vcodec_status_t vcodec_inter_write_matched_block(vcodec_enc_ctx_t *p_ctx,
     block_len += golomb_rice_param / 2 + 1 + 1;
 
     int prev = 0;
-    int min_rle_len = 2;
     int rle_runs = 0;
     for (int i = 0; i < INTER_BLOCK_SIZE; i++) {
         for (int j = 0; j < INTER_BLOCK_SIZE; j++) {
             const int diff = p_prev_block[i * INTER_BLOCK_SIZE + j] - p_block[i * INTER_BLOCK_SIZE + j];
             const int encoded_value = diff >= 0 ? (diff * 2) : (-diff * 2 + 1);
+            printf("%d ", encoded_value);
             if (prev == encoded_value) {
                 rle_runs++;
             } else {
-                if (rle_runs >= min_rle_len) {
-                    //printf("R %d ", rle_runs - min_rle_len);
-                    status = vcodec_med_gr_write_golomb_rice_code(p_ctx, rle_runs - min_rle_len, golomb_rice_param / 2);
+                if (rle_runs >= INTER_MIN_RLE_LEN) {
+                    //printf("R %d ", rle_runs - INTER_MIN_RLE_LEN);
+                    status = vcodec_med_gr_write_golomb_rice_code(p_ctx, rle_runs - INTER_MIN_RLE_LEN, golomb_rice_param / 2);
                     if (status != VCODEC_STATUS_OK) {
                         return status;
                     }
-                    block_len += (rle_runs - min_rle_len) / (golomb_rice_param / 2 + (golomb_rice_param < 2)) + 1 + (golomb_rice_param / 2);
+                    block_len += (rle_runs - INTER_MIN_RLE_LEN) >> (golomb_rice_param / 2) + 1 + (golomb_rice_param / 2);
                 }
                 rle_runs = 1;
             }
-            if (rle_runs < min_rle_len) {
+            if (rle_runs < INTER_MIN_RLE_LEN) {
                 //const int golomb_rice_param = sizeof(int) * 8 - 1 - __builtin_clz(prev + 1);
                 //printf("P %d ", encoded_value);
                 status = vcodec_med_gr_write_golomb_rice_code(p_ctx, encoded_value, golomb_rice_param);
                 if (status != VCODEC_STATUS_OK) {
                     return status;
                 }
-                block_len += (encoded_value) / (golomb_rice_param + (golomb_rice_param == 0)) + 1 + (golomb_rice_param);
+                block_len += ((encoded_value) >> (golomb_rice_param)) + 1 + (golomb_rice_param);
             }
             prev = encoded_value;
         }
     }
 
-    if (rle_runs >= min_rle_len) {
-        //printf("R %d ", rle_runs - min_rle_len);
-        status = vcodec_med_gr_write_golomb_rice_code(p_ctx, rle_runs - min_rle_len, golomb_rice_param / 2);
+    if (rle_runs >= INTER_MIN_RLE_LEN) {
+        //printf("R %d ", rle_runs - INTER_MIN_RLE_LEN);
+        status = vcodec_med_gr_write_golomb_rice_code(p_ctx, rle_runs - INTER_MIN_RLE_LEN, golomb_rice_param / 2);
         if (status != VCODEC_STATUS_OK) {
             return status;
         }
-        block_len += (rle_runs - min_rle_len) / (golomb_rice_param / 2 + (golomb_rice_param < 2)) + 1 + (golomb_rice_param / 2);
+        block_len += (rle_runs - INTER_MIN_RLE_LEN) >> (golomb_rice_param / 2) + 1 + (golomb_rice_param / 2);
     }
 
-    printf("\n%d %d%%\n", block_len, (block_len * 100) / (INTER_BLOCK_SIZE * INTER_BLOCK_SIZE * 8));
+    const int ratio = (block_len * 100) / (INTER_BLOCK_SIZE * INTER_BLOCK_SIZE * 8);
+    printf("\n");
+    if (ratio > 50) {
+        printf(">>>>>>>>>>     <<<<<<<<<\n");
+    }
+    printf("%d %d %d%%\n", golomb_rice_param, block_len, ratio);
 
     return status;
 }
@@ -258,15 +275,19 @@ static vcodec_status_t vcodec_inter_write_matched_block(vcodec_enc_ctx_t *p_ctx,
 static vcodec_status_t vcodec_inter_write_unmatched_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block) {
     int prev = p_block[0];
     int diff = prev;
+    int block_len = 0;
+
     vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, prev, 8);
     if (status != VCODEC_STATUS_OK) {
         return status;
     }
+    block_len += 8;
     for (int i = 1; i < INTER_BLOCK_SIZE; i++) {
         const int golomb_rice_param = sizeof(int) * 8 - 1 - __builtin_clz(diff + (0 == diff));
         diff = prev - p_block[i];
         const int encoded_value = diff >= 0 ? (diff * 2) : (-diff * 2 + 1);
         status = vcodec_med_gr_write_golomb_rice_code(p_ctx, encoded_value, golomb_rice_param);
+        block_len += 1 + encoded_value >> golomb_rice_param + golomb_rice_param;
         if (status != VCODEC_STATUS_OK) {
             return status;
         }
@@ -297,6 +318,7 @@ static vcodec_status_t vcodec_inter_write_unmatched_block(vcodec_enc_ctx_t *p_ct
                 if (VCODEC_STATUS_OK != status) {
                     return status;
                 }
+                block_len += 1 + rle_runs >> 3 + 3;
             } else {
                 if (0 == j) {
                     predicted_value = B;
@@ -312,6 +334,7 @@ static vcodec_status_t vcodec_inter_write_unmatched_block(vcodec_enc_ctx_t *p_ct
                 if (status != VCODEC_STATUS_OK) {
                     return status;
                 }
+                block_len += 1 + encoded_value >> golomb_rice_param + golomb_rice_param;
             }
         }
         p_prev_line = p_block + i * INTER_BLOCK_SIZE;
@@ -327,4 +350,68 @@ static int vcodec_int_sqrt(int val) {
         i++;
     }
     return i;
+}
+
+static int vcodec_inter_estimate_gr_param_for_block(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_block, int x, int y) {
+    const uint8_t *p_prev_block = p_ctx->p_buffer + x * p_ctx->width * INTER_BLOCK_SIZE + y * INTER_BLOCK_SIZE;
+
+    int prev = 0;
+    int rle_runs = 0;
+    int n = 0;
+    int lengths[INTER_MAX_GR_PARAM + 1] = { 0 };
+    for (int i = 0; i < INTER_BLOCK_SIZE; i++) {
+        for (int j = 0; j < INTER_BLOCK_SIZE; j++) {
+            const int diff = p_prev_block[i * INTER_BLOCK_SIZE + j] - p_block[i * INTER_BLOCK_SIZE + j];
+            const int encoded_value = diff >= 0 ? (diff * 2) : (-diff * 2 + 1);
+            if (prev == encoded_value) {
+                rle_runs++;
+            } else {
+                if (rle_runs >= INTER_MIN_RLE_LEN) {
+                    //sum += rle_runs - INTER_MIN_RLE_LEN;
+                }
+                rle_runs = 1;
+            }
+            if (rle_runs < INTER_MIN_RLE_LEN) {
+                //printf("PE %d ", encoded_value);
+                for (int k = 0; k < INTER_MAX_GR_PARAM + 1; k++) {
+                    lengths[k] += encoded_value >> k;
+                }
+                n++;
+            }
+            prev = encoded_value;
+        }
+    }
+    if (rle_runs >= INTER_MIN_RLE_LEN) {
+        //sum += rle_runs - INTER_MIN_RLE_LEN;
+    }
+
+    //printf("\nE ");
+
+    int min_len = INT_MAX;
+    int k = 0;
+    for (; k < INTER_MAX_GR_PARAM + 1; k++) {
+        const int len = n * (k + 1) + lengths[k];
+        //printf("%d ", len);
+        if (len < min_len) {
+            min_len = len;
+        } else if (len > min_len) {
+            break;
+        }
+    }
+
+    //printf("\n");
+
+    return k > 0 ? k - 1 : 0;
+}
+
+static vcodec_status_t vcodec_write_runlen(vcodec_enc_ctx_t *p_ctx, int runlen) {
+    if (0 == runlen) {
+        return vcodec_bit_buffer_write(p_ctx, 0, 1);
+    }
+    vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, 1, 1);
+    if (VCODEC_STATUS_OK != status) {
+        return status;
+    }
+
+    return status;
 }

@@ -77,9 +77,11 @@ static int pgm_read(const char *path, pgm_file_t *file) {
 
 static vcodec_status_t vcodec_write(const uint8_t *p_data, uint32_t size, void *ctx) {
     io_ctx_t *p_io_ctx = ctx;
+    /*
     if (fwrite(p_data, size, 1, p_io_ctx->out_file) != 1) {
         return VCODEC_STATUS_IO_FAILED;
     }
+    */
 
     p_io_ctx->out_size += size;
     p_io_ctx->current_frame_size += size;
@@ -130,6 +132,7 @@ int main(int argc, char **argv) {
     while (1) {
         char filename[256];
         snprintf(filename, sizeof(filename), argv[1], num_files + 1);
+        //printf("%s\n", filename);
         int pgm_ret = pgm_read(filename, &pgm_file);
         if (FILE_NOT_FOUND == pgm_ret) {
             printf("Finished processing %d files\n", num_files);
