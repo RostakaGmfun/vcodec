@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <stdio.h>
 
 #define INTER_BLOCK_SIZE 16
 #define INTER_MAX_BLOCK_MSE INTER_BLOCK_SIZE*INTER_BLOCK_SIZE*64
