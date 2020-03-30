@@ -5,7 +5,7 @@
 #include <ctype.h>
 
 #include "vcodec/vcodec.h"
-#include "v4l_capture.h"
+#include "tools/source.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -119,13 +119,12 @@ int main(int argc, char **argv) {
         SOURCE_CAPTURE,
         SOURCE_PGM,
     } source = argc == 2 ? SOURCE_CAPTURE : SOURCE_PGM;
-    if (argc != 2 || argc != 3) {
+    if (argc != 2 && argc != 3) {
+        fprintf(stderr, "Wrong number of args %d\n", argc);
         return EXIT_FAILURE;
     }
     io_ctx_t io_ctx = { 0 };
     vcodec_enc_ctx_t vcodec_enc_ctx = {
-        .width  = 0,
-        .height = 0,
         .write  = vcodec_write,
         .alloc  = vcodec_alloc,
         .free   = vcodec_free,
@@ -134,48 +133,37 @@ int main(int argc, char **argv) {
 
     int num_files = 0;
     pgm_file_t pgm_file = { 0 };
-    while (1) {
-        char filename[256];
-        snprintf(filename, sizeof(filename), argv[1], num_files + 1);
-        //printf("%s\n", filename);
-        int pgm_ret = pgm_read(filename, &pgm_file);
-        if (FILE_NOT_FOUND == pgm_ret) {
-            printf("Finished processing %d files\n", num_files);
-            if (NULL != io_ctx.out_file) {
-                fclose(io_ctx.out_file);
-            }
-            return 0;
-        }
-        if (0 != pgm_read(filename, &pgm_file)) {
-            fprintf(stderr, "Failed to read PGM file %s\n", filename);
-            return EXIT_FAILURE;
-        }
 
-        vcodec_status_t ret = VCODEC_STATUS_OK;
-        if (0 == vcodec_enc_ctx.width) {
-            vcodec_enc_ctx.width = pgm_file.width;
-            vcodec_enc_ctx.height = pgm_file.height;
-            ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_INTER);
-            if (ret != VCODEC_STATUS_OK) {
-                fprintf(stderr, "Failed to initialize vcodec %d for %dx%d\n", ret, vcodec_enc_ctx.width, vcodec_enc_ctx.height);
-                free(pgm_file.p_data);
-                return EXIT_FAILURE;
-            }
-            io_ctx.out_file = fopen(argv[2], "wb");
-            if (NULL == io_ctx.out_file) {
-                fprintf(stderr, "Failed to open output file");
-                free(pgm_file.p_data);
-                return EXIT_FAILURE;
-            }
-            setvbuf(io_ctx.out_file, NULL, _IOFBF, 8 * 1024 * 1024); // 8MB buffering
-            printf("vcodec initialized for %dx%d\n", vcodec_enc_ctx.width, vcodec_enc_ctx.height);
-        }
+    vcodec_source_t source_ctx = { 0 };
+    if (vcodec_source_init(&source_ctx, VCODEC_SOURCE_Y4M, argv[1]) != VCODEC_STATUS_OK) {
+        fprintf(stderr, "Failed to initialize vcodec source from %s\n", argv[1]);
+        return 1;
+    }
 
-        io_ctx.data_size = pgm_file.width * pgm_file.height;
+    uint8_t *p_framebuffer = malloc(source_ctx.frame_size);
+    if (NULL == p_framebuffer) {
+        fprintf(stderr, "Failed to allocate framebuffer of size %u\n", source_ctx.frame_size);
+        return 1;
+    }
 
+    vcodec_enc_ctx.width = source_ctx.width;
+    vcodec_enc_ctx.height = source_ctx.height;
+    vcodec_status_t ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_MED_GR);
+    if (ret != VCODEC_STATUS_OK) {
+        fprintf(stderr, "Failed to initialize vcodec %d for %dx%d\n", ret, vcodec_enc_ctx.width, vcodec_enc_ctx.height);
+        free(pgm_file.p_data);
+        return EXIT_FAILURE;
+    }
+
+    printf("Initialized from %s: %dx%d %u bytes/frame\n", argv[1], source_ctx.width, source_ctx.height, source_ctx.frame_size);
+
+    int num_frames = 0;
+    vcodec_status_t vcodec_ret = VCODEC_STATUS_OK;
+    while (VCODEC_STATUS_OK == (vcodec_ret = source_ctx.read_frame(&source_ctx, p_framebuffer))) {
         const clock_t start_time = clock();
-        ret = vcodec_enc_ctx.process_frame(&vcodec_enc_ctx, pgm_file.p_data);
+        ret = vcodec_enc_ctx.process_frame(&vcodec_enc_ctx, p_framebuffer);
         const clock_t end_time = clock();
+        io_ctx.data_size = source_ctx.frame_size;
 
         if (VCODEC_STATUS_OK != ret) {
             fprintf(stderr, "vcodec error %d", ret);
@@ -183,8 +171,10 @@ int main(int argc, char **argv) {
         }
 
         print_vcodec_stats(&vcodec_enc_ctx, end_time - start_time);
-        num_files++;
+        num_frames++;
     }
+
+    printf("Finish encoding, status %d\n", vcodec_ret);
 
     vcodec_enc_ctx.deinit(&vcodec_enc_ctx);
     return 0;

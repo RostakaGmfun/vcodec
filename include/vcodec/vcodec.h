@@ -1,5 +1,4 @@
-#ifndef _VCODEC_H_
-#define _VCODEC_H_
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -9,6 +8,7 @@ typedef enum {
     VCODEC_STATUS_INVAL     = -1,
     VCODEC_STATUS_NOMEM     = -2,
     VCODEC_STATUS_IO_FAILED = -3,
+    VCODEC_STATUS_NOENT     = -4,
 } vcodec_status_t;
 
 typedef enum {
@@ -47,6 +47,9 @@ typedef struct vcodec_enc_ctx {
     void *encoder_ctx;
 } vcodec_enc_ctx_t;
 
-vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type);
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+} vcodec_dec_ctx_t;
 
-#endif // _VCODEC_H_
+vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type);
