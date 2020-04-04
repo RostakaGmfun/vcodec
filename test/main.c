@@ -84,6 +84,7 @@ static vcodec_status_t vcodec_write(const uint8_t *p_data, uint32_t size, void *
     }
     */
 
+    //printf("W%lu ", size);
     p_io_ctx->out_size += size;
     p_io_ctx->current_frame_size += size;
 
@@ -109,7 +110,7 @@ static void print_vcodec_stats(const vcodec_enc_ctx_t *p_ctx, clock_t diff) {
     avg_fps += ((diff * 1000) / CLOCKS_PER_SEC);
     total_time += diff;
     if (cnt % 100 == 0) {
-        printf("Compressed size %luM, ratio %f%%, avg fps %fms, total time %lus\n", p_io_ctx->current_frame_size >> 20,
+        printf("Compressed size %luK, ratio %f%%, avg fps %fms, total time %lus\n", p_io_ctx->current_frame_size >> 10,
                 ((float)p_io_ctx->current_frame_size / total_size) * 100, avg_fps / cnt, total_time / CLOCKS_PER_SEC);
     }
 }
@@ -132,7 +133,7 @@ int main(int argc, char **argv) {
     };
 
     int num_files = 0;
-    pgm_file_t pgm_file = { 0 };
+
 
     vcodec_source_t source_ctx = { 0 };
     if (vcodec_source_init(&source_ctx, VCODEC_SOURCE_Y4M, argv[1]) != VCODEC_STATUS_OK) {
@@ -148,10 +149,9 @@ int main(int argc, char **argv) {
 
     vcodec_enc_ctx.width = source_ctx.width;
     vcodec_enc_ctx.height = source_ctx.height;
-    vcodec_status_t ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_MED_GR);
+    vcodec_status_t ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_VEC);
     if (ret != VCODEC_STATUS_OK) {
         fprintf(stderr, "Failed to initialize vcodec %d for %dx%d\n", ret, vcodec_enc_ctx.width, vcodec_enc_ctx.height);
-        free(pgm_file.p_data);
         return EXIT_FAILURE;
     }
 

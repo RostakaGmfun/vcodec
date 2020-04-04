@@ -15,6 +15,7 @@ typedef enum {
     VCODEC_TYPE_INVALID,
     VCODEC_TYPE_MED_GR,
     VCODEC_TYPE_INTER,
+    VCODEC_TYPE_VEC,
 } vcodec_type_t;
 
 typedef vcodec_status_t (*vcodec_write_t)(const uint8_t *p_data, uint32_t size, void *ctx);

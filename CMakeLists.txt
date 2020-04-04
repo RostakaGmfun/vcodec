@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(vcodec C)
 
-add_library(vcodec src/vcodec_common.c src/vcodec_med_gr.c src/vcodec_inter.c)
+add_library(vcodec src/vcodec_common.c src/vcodec_med_gr.c src/vcodec_inter.c
+                   src/vcodec_vec.c src/vec_table.c)
 target_include_directories(vcodec PUBLIC include/)
 target_compile_options(vcodec PRIVATE -O3)
 

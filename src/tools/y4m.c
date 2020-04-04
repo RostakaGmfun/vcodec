@@ -51,7 +51,7 @@ vcodec_status_t vcodec_y4m_init(vcodec_source_t *p_ctx, const char *path) {
     int aspect_ratio_nom = 0;
     int aspect_ratio_denom = 0;
     char color_space[16 + 1] = { 0 };
-    if (fscanf(f, "YUV4MPEG2 W%d H%d F%d:%d I%c A%d:%d C%16s%*s\n", &p_ctx->width, &p_ctx->height, &frame_nom,
+    if (fscanf(f, "YUV4MPEG2 W%d H%d F%d:%d I%c A%d:%d C%16s\n", &p_ctx->width, &p_ctx->height, &frame_nom,
                     &frame_denom, &interlacing_mode, &aspect_ratio_nom, &aspect_ratio_denom, color_space) != 8) {
         fprintf(stderr, "Bad header format\n");
         fclose(f);
@@ -63,7 +63,7 @@ vcodec_status_t vcodec_y4m_init(vcodec_source_t *p_ctx, const char *path) {
 
     p_ctx->read_frame = y4m_read_frame;
     p_ctx->deinit = y4m_deinit;
-    p_ctx->frame_size = (p_ctx->width * p_ctx->height * 3) / 2;
+    p_ctx->frame_size = p_ctx->width * p_ctx->height;
     ((vcodec_y4m_ctx_t *)p_ctx->p_source_ctx)->infile = f;
 
     return VCODEC_STATUS_OK;

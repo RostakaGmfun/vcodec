@@ -45,6 +45,8 @@ vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type) {
         return vcodec_med_gr_init(p_ctx);
     case VCODEC_TYPE_INTER:
         return vcodec_inter_init(p_ctx);
+    case VCODEC_TYPE_VEC:
+        return vcodec_vec_init(p_ctx);
     default:
         return VCODEC_STATUS_INVAL;
     }
