@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
 
     vcodec_enc_ctx.width = source_ctx.width;
     vcodec_enc_ctx.height = source_ctx.height;
-    vcodec_status_t ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_VEC);
+    vcodec_status_t ret = vcodec_enc_init(&vcodec_enc_ctx, VCODEC_TYPE_DCT);
     if (ret != VCODEC_STATUS_OK) {
         fprintf(stderr, "Failed to initialize vcodec %d for %dx%d\n", ret, vcodec_enc_ctx.width, vcodec_enc_ctx.height);
         return EXIT_FAILURE;
