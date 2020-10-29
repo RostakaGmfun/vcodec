@@ -96,7 +96,7 @@ typedef JSAMPROW *JSAMPARRAY;	/* ptr to some rows (a 2-D sample array) */
 #define ONE	((INT32) 1)
 #define CONST_SCALE (ONE << CONST_BITS)
 
-void jpeg_fdct_islow(DCTELEM * data, uint8_t *sample_data)
+void jpeg_fdct_islow(DCTELEM * data, int *sample_data)
 {
   INT32 tmp0, tmp1, tmp2, tmp3;
   INT32 tmp10, tmp11, tmp12, tmp13;
