@@ -67,7 +67,7 @@ static int pgm_read(const char *path, pgm_file_t *file) {
 
     size_t ret = fread(file->p_data, image_size, 1, f);
     if (ret != 1) {
-        printf("read failed %d %d %d %d %ld %ld\n", ferror(f), feof(f), file->width, file->height, ftell(f), ret);
+        fprintf(stderr, "read failed %d %d %d %d %ld %ld\n", ferror(f), feof(f), file->width, file->height, ftell(f), ret);
         fclose(f);
         return -1;
     }
@@ -78,13 +78,10 @@ static int pgm_read(const char *path, pgm_file_t *file) {
 
 static vcodec_status_t vcodec_write(const uint8_t *p_data, uint32_t size, void *ctx) {
     io_ctx_t *p_io_ctx = ctx;
-    /*
     if (fwrite(p_data, size, 1, p_io_ctx->out_file) != 1) {
         return VCODEC_STATUS_IO_FAILED;
     }
-    */
 
-    //printf("W%lu ", size);
     p_io_ctx->out_size += size;
     p_io_ctx->current_frame_size += size;
 
@@ -110,7 +107,7 @@ static void print_vcodec_stats(const vcodec_enc_ctx_t *p_ctx, clock_t diff) {
     avg_fps += ((diff * 1000) / CLOCKS_PER_SEC);
     total_time += diff;
     if (cnt % 100 == 0) {
-        printf("Compressed size %luK, ratio %f%%, avg fps %fms, total time %lus\n", p_io_ctx->current_frame_size >> 10,
+        fprintf(stderr, "Compressed size %luK, ratio %f%%, avg fps %fms, total time %lus\n", p_io_ctx->current_frame_size >> 10,
                 ((float)p_io_ctx->current_frame_size / total_size) * 100, avg_fps / cnt, total_time / CLOCKS_PER_SEC);
     }
 }
@@ -132,14 +129,19 @@ int main(int argc, char **argv) {
         .io_ctx = &io_ctx,
     };
 
-    int num_files = 0;
-
-
     vcodec_source_t source_ctx = { 0 };
     if (vcodec_source_init(&source_ctx, VCODEC_SOURCE_Y4M, argv[1]) != VCODEC_STATUS_OK) {
         fprintf(stderr, "Failed to initialize vcodec source from %s\n", argv[1]);
         return 1;
     }
+
+    io_ctx.out_file = stdout;
+    if (NULL == io_ctx.out_file) {
+        fprintf(stderr, "Failed to open output file\n");
+        return 1;
+    }
+    fprintf(io_ctx.out_file, "YUV4MPEG2 W%d H%d F%d:%d I%c A%d:%d C%s\n", source_ctx.width, source_ctx.height, 30,
+        1, 'p', 0, 0, "mono");
 
     uint8_t *p_framebuffer = malloc(source_ctx.frame_size);
     if (NULL == p_framebuffer) {
@@ -155,7 +157,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    printf("Initialized from %s: %dx%d %u bytes/frame\n", argv[1], source_ctx.width, source_ctx.height, source_ctx.frame_size);
+    fprintf(stderr, "Initialized from %s: %dx%d %u bytes/frame\n", argv[1], source_ctx.width, source_ctx.height, source_ctx.frame_size);
 
     int num_frames = 0;
     vcodec_status_t vcodec_ret = VCODEC_STATUS_OK;
@@ -174,7 +176,8 @@ int main(int argc, char **argv) {
         num_frames++;
     }
 
-    printf("Finish encoding, status %d\n", vcodec_ret);
+    fprintf(stderr, "Finish encoding, status %d\n", vcodec_ret);
+    fclose(io_ctx.out_file);
 
     vcodec_enc_ctx.deinit(&vcodec_enc_ctx);
     return 0;

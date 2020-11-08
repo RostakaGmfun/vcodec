@@ -58,7 +58,7 @@ static int compute_block_sum(const int *source, int block_size);
 static prediction_mode_t predict_block(int *prediction, const uint8_t *p_ref_frame, int block_x, int block_y, const uint8_t *p_source_frame, int frame_width, int block_size);
 static void unpredict_block(int *reconstructed, const uint8_t *p_ref_frame, int x, int y, int block_size, int frame_width, prediction_mode_t pred_mode);
 
-static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant);
+static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
 
 vcodec_status_t vcodec_dct_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
@@ -69,7 +69,6 @@ vcodec_status_t vcodec_dct_init(vcodec_enc_ctx_t *p_ctx) {
     if (NULL == p_ctx->encoder_ctx) {
         return VCODEC_STATUS_NOMEM;
     }
-
 
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
     p_dct_ctx->p_ref_frame = p_ctx->alloc(p_ctx->width * p_ctx->height);
@@ -104,41 +103,48 @@ static vcodec_status_t vcodec_dct_deinit(vcodec_enc_ctx_t *p_ctx) {
 }
 
 static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame) {
-    uint32_t block_size = 4;
-    int block[block_size * block_size];
-    int dct_block[block_size * block_size];
-    int quant[8*8] = {
-        16,	11,	10,	16,	24,  40,  51,  61,
-        12,	12,	14,	19,	26,  58,  60,  55,
-        14,	13,	16,	24,	40,  57,  69,  56,
-        14,	17,	22,	29,	51,  87,  80,  62,
-        18,	22,	37,	56,	68,  109, 103, 77,
-        24,	35,	55,	64,	81,  104, 113, 92,
-        49,	64,	78,	87,	103, 121, 120, 101,
-        72,	92,	95,	98,	112, 100, 103, 99,
+    uint32_t macroblock_size = 16;
+    int quant[4*4] = {
+        16,	11,	10,	16,
+        12,	12,	14,	19,
+        14,	13,	16,	24,
+        14,	17,	22,	29,
     };
-    int zigzag_block[block_size * block_size];
 
     int prev_dc = 0;
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
-    for (int y = 0; y < p_ctx->height; y += block_size) {
-        for (int x = 0; x < p_ctx->width; x += block_size) {
-            //printf("%d ", p_frame[y + p_ctx->width + x]);
-            encode_macroblock_i(p_ctx, p_frame, x, y, quant);
+    int h = p_ctx->height / macroblock_size * macroblock_size;
+    int y = 0;
+    for (; y < h; y += macroblock_size) {
+        int x = 0;
+        for (; x < p_ctx->width; x += macroblock_size) {
+            encode_macroblock_i(p_ctx, p_frame, x, y, quant, macroblock_size);
         }
     }
+    int reduced_macroblock_size;
+    if ((p_ctx->height - y) % 8 == 0) {
+        reduced_macroblock_size = 8;
+    } else {
+        reduced_macroblock_size = 4;
+    }
+    for (; y < p_ctx->height; y += reduced_macroblock_size) {
+        int x = 0;
+        for (; x < p_ctx->width; x += reduced_macroblock_size) {
+            encode_macroblock_i(p_ctx, p_frame, x, y, quant, reduced_macroblock_size);
+        }
+    }
+
     int mse = 0;
     for (int i = 0; i < p_ctx->width * p_ctx->height; i++) {
-        const int diff = p_frame[i]- p_dct_ctx->p_ref_frame[i];
-        //printf("%d ", diff);
-        if (i % p_ctx->width == 0) {
-            //printf("\n\n");
-        }
+        const int diff = p_frame[i] - p_dct_ctx->p_ref_frame[i];
         mse += diff * diff;
     }
     double mse_divided = (double)mse / (p_ctx->width * p_ctx->height);
-    double psnr = 10 * log10((double)(255 * 255) / mse_divided);
-    printf("PSNR %f mse %f\n", psnr, mse_divided);
+    double psnr = 20 * log10(255) - 10 * log10(mse_divided);
+    fprintf(stderr, "PSNR %f mse %f\n", psnr, mse_divided);
+    const char *frame_hdr = "FRAME\n";
+    p_ctx->write(frame_hdr, strlen(frame_hdr), p_ctx->io_ctx);
+    p_ctx->write(p_dct_ctx->p_ref_frame, p_ctx->width * p_ctx->height, p_ctx->io_ctx);
 
     return VCODEC_STATUS_OK;
 }
@@ -306,8 +312,7 @@ static void unpredict_block(int *reconstructed, const uint8_t *p_ref_frame, int 
     }
 }
 
-static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant) {
-    const int macroblock_size = 16;
+static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
     const int block_size = 4;
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
     // Copy block to temp location
@@ -320,14 +325,15 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
         }
         debug_printf("\n");
     }
+
     for (int x = 0; x < macroblock_size; x += block_size) {
         for (int y = 0; y < macroblock_size; y += block_size) {
-            debug_printf("DCT:\n");
             int block[block_size * block_size];
             for (int i = 0; i < block_size; i++) {
-                memcpy(block + i * block_size, macroblock + (y + i) * block_size + x, sizeof(int) * block_size);
+                memcpy(block + i * block_size, macroblock + (y + i) * macroblock_size + x, sizeof(int) * block_size);
             }
             forward4x4(block, block);
+            debug_printf("DCT:\n");
             for (int i = 0; i < block_size; i++) {
                 for (int j = 0; j < block_size; j++) {
                     debug_printf("%4d ", block[i * block_size + j]);
@@ -338,8 +344,8 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
             int zigzag_block[block_size * block_size];
             for (int i = 0; i < block_size; i++) {
                 for (int j = 0; j < block_size; j++) {
-                    zigzag_block[jpeg_zigzag_order4x4[i][j]] = block[i * block_size + j];// / (p_quant[i * block_size + j]);
-                    rescaled_block[i * block_size + j] = zigzag_block[jpeg_zigzag_order4x4[i][j]];// * (p_quant[i * block_size + j]);
+                    zigzag_block[jpeg_zigzag_order4x4[i][j]] = block[i * block_size + j] / (p_quant[i * block_size + j]);
+                    rescaled_block[i * block_size + j] = zigzag_block[jpeg_zigzag_order4x4[i][j]] * (p_quant[i * block_size + j]);
                 }
             }
             int coded_data[block_size * block_size];
@@ -348,15 +354,15 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
                 debug_printf("%4d ", zigzag_block[i]);
             }
             debug_printf("\n");
-            int reconstructed_macroblock[block_size * block_size];
-            inverse4x4(reconstructed_macroblock, rescaled_block);
-            debug_printf("IDCT:\n");
+            int reconstructed_block[block_size * block_size];
+            inverse4x4(reconstructed_block, rescaled_block);
+            debug_printf("IDCT out:\n");
             for (int i = 0; i < block_size; i++) {
                 for (int j = 0; j < block_size; j++) {
-                    reconstructed_macroblock[i * block_size + j] /= 16;
-                    debug_printf("%4d ", reconstructed_macroblock[i * block_size + j]);
+                    reconstructed_block[i * block_size + j] /= 16;
+                    debug_printf("%4d ", reconstructed_block[i * block_size + j]);
                 }
-                memcpy(macroblock + y * macroblock_size + x, reconstructed_macroblock + i * block_size, block_size);
+                memcpy(macroblock + (y + i) * macroblock_size + x, reconstructed_block + i * block_size, sizeof(int) * block_size);
                 debug_printf("\n");
             }
         }
@@ -367,9 +373,11 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
     int sad = 0;
     for (int i = 0; i < macroblock_size; i++) {
         for (int j = 0; j < macroblock_size; j++) {
-            p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j] = MIN(macroblock[i * macroblock_size + j], 255);
-            debug_printf("%3d ", p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j]);
-            sad += abs(p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j] - p_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j]);
+            p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j] = MAX(MIN(macroblock[i * macroblock_size + j], 255), 0);
+            debug_printf("%3d", p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j]);
+            const int diff = p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j] - p_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j];
+            debug_printf("(%3d) ", diff);
+            sad += abs(diff);
         }
         debug_printf("\n");
     }

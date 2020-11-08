@@ -57,8 +57,7 @@ vcodec_status_t vcodec_y4m_init(vcodec_source_t *p_ctx, const char *path) {
         fclose(f);
         return VCODEC_STATUS_IO_FAILED;
     }
-
-    printf("Opened Y4M: YUV4MPEG2 W%d H%d F%d:%d I%c A%d:%d C%s\n", p_ctx->width, p_ctx->height, frame_nom,
+    fprintf(stderr, "Opened Y4M: YUV4MPEG2 W%d H%d F%d:%d I%c A%d:%d C%s\n", p_ctx->width, p_ctx->height, frame_nom,
                     frame_denom, interlacing_mode, aspect_ratio_nom, aspect_ratio_denom, color_space);
 
     p_ctx->read_frame = y4m_read_frame;
