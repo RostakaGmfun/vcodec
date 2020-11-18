@@ -59,6 +59,7 @@ static prediction_mode_t predict_block(int *prediction, const uint8_t *p_ref_fra
 static void unpredict_block(int *reconstructed, const uint8_t *p_ref_frame, int x, int y, int block_size, int frame_width, prediction_mode_t pred_mode);
 
 static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
+static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
 
 vcodec_status_t vcodec_dct_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
@@ -155,7 +156,7 @@ static vcodec_status_t encode_p_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_
 
 static void predict_dc(int *pred_block, const uint8_t *ref_start, const int *p_src, int block_size, int ref_width) {
     int dc_val = 0;
-    for (int i = 0; i < block_size; i++) {
+    for (int i = 1; i < block_size; i++) {
         dc_val += ref_start[i];
     }
 
@@ -190,7 +191,7 @@ static void predict_vertical(int *pred_block, const uint8_t *ref_start, const in
 
 static void unpredict_dc(int *pred_block, const uint8_t *ref_start, int block_size, int ref_width) {
     int dc_val = 0;
-    for (int i = 0; i < block_size; i++) {
+    for (int i = 1; i < block_size; i++) {
         dc_val += ref_start[i];
     }
 
@@ -326,10 +327,11 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
         debug_printf("\n");
     }
 
-    for (int x = 0; x < macroblock_size; x += block_size) {
-        for (int y = 0; y < macroblock_size; y += block_size) {
+    for (int y = 0; y < macroblock_size; y += block_size) {
+        for (int x = 0; x < macroblock_size; x += block_size) {
             int block[block_size * block_size];
             for (int i = 0; i < block_size; i++) {
+                // TODO: rework transform functions to work directly with macroblock buffer to avoid this copy operations
                 memcpy(block + i * block_size, macroblock + (y + i) * macroblock_size + x, sizeof(int) * block_size);
             }
             forward4x4(block, block);
@@ -348,14 +350,27 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
                     rescaled_block[i * block_size + j] = zigzag_block[jpeg_zigzag_order4x4[i][j]] * (p_quant[i * block_size + j]);
                 }
             }
-            int coded_data[block_size * block_size];
-            debug_printf("CODING\n");
-            for (int i = 0; i < block_size * block_size; i++) {
+            debug_printf("AC CODING:\n");
+            for (int i = 1; i < block_size * block_size; i++) {
                 debug_printf("%4d ", zigzag_block[i]);
             }
             debug_printf("\n");
+            for (int i = 0; i < block_size; i++) {
+                memcpy(macroblock + (y + i) * macroblock_size + x, rescaled_block + i * block_size, sizeof(int) * block_size);
+            }
+        }
+    }
+
+    encode_dc(p_ctx, macroblock, p_quant, macroblock_size, block_size);
+
+    for (int y = 0; y < macroblock_size; y += block_size) {
+        for (int x = 0; x < macroblock_size; x += block_size) {
             int reconstructed_block[block_size * block_size];
-            inverse4x4(reconstructed_block, rescaled_block);
+            for (int i = 0; i < block_size; i++) {
+                // TODO: rework transform functions to work directly with macroblock buffer to avoid this copy operations
+                memcpy(reconstructed_block + i * block_size, macroblock + (y + i) * macroblock_size + x, sizeof(int) * block_size);
+            }
+            inverse4x4(reconstructed_block, reconstructed_block);
             debug_printf("IDCT out:\n");
             for (int i = 0; i < block_size; i++) {
                 for (int j = 0; j < block_size; j++) {
@@ -374,7 +389,7 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
     for (int i = 0; i < macroblock_size; i++) {
         for (int j = 0; j < macroblock_size; j++) {
             p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j] = MAX(MIN(macroblock[i * macroblock_size + j], 255), 0);
-            debug_printf("%3d", p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j]);
+            debug_printf("%3d ", p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j]);
             const int diff = p_dct_ctx->p_ref_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j] - p_frame[(macroblock_y + i) * p_ctx->width + macroblock_x + j];
             debug_printf("(%3d) ", diff);
             sad += abs(diff);
@@ -382,4 +397,53 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
         debug_printf("\n");
     }
     debug_printf("SAD = %d at %4d %4d\n", sad, macroblock_x, macroblock_y);
+}
+
+static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
+    const int dc_block_size = macroblock_size / block_size;
+    int dc_block[dc_block_size * dc_block_size];
+    for (int y = 0; y < dc_block_size; y++) {
+        for (int x = 0; x < dc_block_size; x++) {
+            dc_block[y * dc_block_size + x] = p_macroblock[y * dc_block_size * macroblock_size + x * dc_block_size];
+        }
+    }
+    debug_printf("DC:\n");
+    for (int y = 0; y < dc_block_size; y++) {
+        for (int x = 0; x < dc_block_size; x++) {
+            debug_printf("%3d ", dc_block[y * block_size + x] / 16);
+        }
+        debug_printf("\n");
+    }
+    if (4 == dc_block_size) {
+        hadamard4x4(dc_block, dc_block);
+    } else {
+        hadamard2x2(dc_block, dc_block);
+    }
+    debug_printf("DC hadamard:\n");
+    for (int y = 0; y < dc_block_size; y++) {
+        for (int x = 0; x < dc_block_size; x++) {
+            dc_block[y * dc_block_size + x] /= p_quant[y * block_size + x];
+            debug_printf("%3d ", dc_block[y * block_size + x]);
+            dc_block[y * dc_block_size + x] *= p_quant[y * block_size + x];
+        }
+        debug_printf("\n");
+    }
+    if (4 == dc_block_size) {
+        ihadamard4x4(dc_block, dc_block);
+    } else {
+        hadamard2x2(dc_block, dc_block);
+    }
+    debug_printf("DC ihadamard:\n");
+    for (int y = 0; y < dc_block_size; y++) {
+        for (int x = 0; x < dc_block_size; x++) {
+            dc_block[y * dc_block_size + x] /= 8;
+            debug_printf("%3d ", dc_block[y * dc_block_size + x]);
+        }
+        debug_printf("\n");
+    }
+    for (int y = 0; y < dc_block_size; y++) {
+        for (int x = 0; x < dc_block_size; x++) {
+            p_macroblock[y * dc_block_size * macroblock_size + x * dc_block_size] = dc_block[y * dc_block_size + x];
+        }
+    }
 }
