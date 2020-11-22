@@ -1,5 +1,6 @@
 #include "vcodec/vcodec.h"
 #include "vcodec_common.h"
+#include "vcodec_transform.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -8,6 +9,7 @@
 #include <math.h>
 #include <limits.h>
 
+#define debug_printf
 #define GOP 1
 
 typedef struct {
@@ -23,16 +25,16 @@ static const int jpeg_zigzag_order4x4[4][4] = {
 };
 
 static vcodec_status_t vcodec_dec_get_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame);
-static vcodec_status_t vcodec_dct_deinit(vcodec_dec_ctx_t *p_ctx);
+static vcodec_status_t vcodec_dec_deinit(vcodec_dec_ctx_t *p_ctx);
 
 static vcodec_status_t decode_key_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame);
 static vcodec_status_t decode_p_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame);
 
 static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
+static void decode_dc(vcodec_dec_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
 
 static vcodec_status_t read_frame_header(vcodec_dec_ctx_t *p_ctx, bool *p_is_key_frame);
-static vcodec_status_t read_ac_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_ac_coeffs);
-static vcodec_status_t read_dc_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_dc_coeffs);
+static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int num);
 static vcodec_status_t read_macroblock_header(vcodec_dec_ctx_t *p_ctx, vcodec_prediction_mode_t *p_pred_mode);
 
 vcodec_status_t vcodec_dec_dct_init(vcodec_dec_ctx_t *p_ctx) {
@@ -52,7 +54,7 @@ vcodec_status_t vcodec_dec_dct_init(vcodec_dec_ctx_t *p_ctx) {
     }
     p_dct_ctx->gop_cnt = 0;
 
-    p_ctx->get_frame = vcodec_dec_process_frame;
+    p_ctx->get_frame = vcodec_dec_get_frame;
     p_ctx->deinit = vcodec_dec_deinit;
     return VCODEC_STATUS_OK;
 }
@@ -60,7 +62,7 @@ vcodec_status_t vcodec_dec_dct_init(vcodec_dec_ctx_t *p_ctx) {
 static vcodec_status_t vcodec_dec_get_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame) {
     dec_ctx_t *p_dct_ctx = p_ctx->decoder_ctx;
     bool is_key_frame = false;
-    vcodec_status_t ret = read_frame_header(ctx, &is_key_frame);
+    vcodec_status_t ret = read_frame_header(p_ctx, &is_key_frame);
     if (VCODEC_STATUS_OK != ret) {
         return ret;
     }
@@ -72,11 +74,11 @@ static vcodec_status_t vcodec_dec_get_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_
     return VCODEC_STATUS_OK;
 }
 
-static vcodec_status_t vcodec_dct_reset(vcodec_enc_ctx_t *p_ctx) {
+static vcodec_status_t vcodec_dct_reset(vcodec_dec_ctx_t *p_ctx) {
     return VCODEC_STATUS_OK;
 }
 
-static vcodec_status_t vcodec_dct_deinit(vcodec_enc_ctx_t *p_ctx) {
+static vcodec_status_t vcodec_dec_deinit(vcodec_dec_ctx_t *p_ctx) {
     return VCODEC_STATUS_OK;
 }
 
@@ -112,11 +114,11 @@ static vcodec_status_t decode_key_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_fram
 
 static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
     const int block_size = 4;
-    vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
+    dec_ctx_t *p_dct_ctx = p_ctx->decoder_ctx;
     vcodec_status_t ret = VCODEC_STATUS_OK;
     // Copy block to temp location
     int macroblock[macroblock_size * macroblock_size];
-    vcodec_prediction_mode_t pred_mode = PREDICTION_MODE_NONE;
+    vcodec_prediction_mode_t pred_mode;
     if (VCODEC_STATUS_OK != (ret = read_macroblock_header(p_ctx, &pred_mode))) {
         return ret;
     }
@@ -126,7 +128,7 @@ static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_f
         for (int x = 0; x < macroblock_size; x += block_size) {
             int zigzag_block[block_size * block_size];
             zigzag_block[0] = 0; // DC to be filled later
-            if (VCODEC_STATUS_OK != (ret = read_ac_coeffs(p_ctx, zigzag_block + 1))) {
+            if (VCODEC_STATUS_OK != (ret = read_coeffs(p_ctx, zigzag_block + 1, block_size * block_size - 1))) {
                 return ret;
             }
             debug_printf("AC COEFFS:\n");
@@ -185,10 +187,10 @@ static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_f
     debug_printf("SAD = %d at %4d %4d\n", sad, macroblock_x, macroblock_y);
 }
 
-static void decode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
+static void decode_dc(vcodec_dec_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
     const int dc_block_size = macroblock_size / block_size;
     int dc_block[dc_block_size * dc_block_size];
-    read_dc_coefs(p_ctx, dc_block);
+    read_coeffs(p_ctx, dc_block, dc_block_size * dc_block_size);
     if (4 == dc_block_size) {
         ihadamard4x4(dc_block, dc_block);
     } else {
@@ -216,21 +218,53 @@ static vcodec_status_t decode_p_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame)
 static vcodec_status_t read_frame_header(vcodec_dec_ctx_t *p_ctx, bool *p_is_key_frame) {
     uint32_t val = 0;
     vcodec_status_t ret = vcodec_bit_buffer_read(p_ctx, &val, 1);
-    *p_is_key_frame = (bool)out;
+    *p_is_key_frame = (bool)val;
     return ret;
 }
 
 static vcodec_status_t read_macroblock_header(vcodec_dec_ctx_t *p_ctx, vcodec_prediction_mode_t *p_pred_mode) {
     uint32_t val;
     vcodec_status_t ret = vcodec_bit_buffer_read(p_ctx, &val, 2);
-    *p_pred = val;
+    *p_pred_mode = val;
     return ret;
 }
 
-static vcodec_status_t read_ac_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_ac_coeffs) {
-    return VCODEC_STATUS_OK;
-}
-
-static vcodec_status_t read_dc_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_dc_coeffs) {
-    return VCODEC_STATUS_OK;
+static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int cnt) {
+    vcodec_status_t ret = VCODEC_STATUS_OK;
+    unsigned int sign_buffer;
+    int sign_buffer_size = 0;
+    memset(p_coeffs, 0, sizeof(int) * cnt);
+    uint32_t num_zeroes = 0;
+    ret = vcodec_read_exp_golomb_code(p_ctx, &num_zeroes);
+    if (VCODEC_STATUS_OK != ret) {
+        return ret;
+    }
+    int num = cnt; // save cnt for later processing
+    // First zeroes run length might be equal to cnt, so that loop is never executed
+    cnt -= num_zeroes;
+    while (cnt > 0) {
+        uint32_t absval = 0;
+        ret = vcodec_read_exp_golomb_code(p_ctx, &absval);
+        if (VCODEC_STATUS_OK != ret) {
+            return ret;
+        }
+        p_coeffs[cnt - 1] = absval;
+        sign_buffer_size++;
+        ret = vcodec_read_exp_golomb_code(p_ctx, &num_zeroes);
+        if (VCODEC_STATUS_OK != ret) {
+            return ret;
+        }
+        cnt -= num_zeroes;
+    }
+    ret = vcodec_bit_buffer_read(p_ctx, &sign_buffer, sign_buffer_size);
+    if (VCODEC_STATUS_OK != ret) {
+        return ret;
+    }
+    while (num > 0) {
+        if (p_coeffs[num - 1] != 0) {
+            p_coeffs[num - 1] *= (sign_buffer & (1 << sign_buffer_size)) ? 1 : -1;
+            sign_buffer <<= 1;
+        }
+    }
+    return ret;
 }

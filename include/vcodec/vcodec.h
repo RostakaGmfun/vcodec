@@ -9,6 +9,7 @@ typedef enum {
     VCODEC_STATUS_NOMEM     = -2,
     VCODEC_STATUS_IO_FAILED = -3,
     VCODEC_STATUS_NOENT     = -4,
+    VCODEC_STATUS_EOF       = -5,
 } vcodec_status_t;
 
 typedef enum {
@@ -62,10 +63,15 @@ typedef struct vcodec_dec_ctx {
     vcodec_read_t read;
     vcodec_alloc_t alloc;
     vcodec_free_t free;
+    void *io_ctx;
 
     vcodec_dec_get_frame_t get_frame;
     vcodec_dec_deinit_t deinit;
     void *decoder_ctx;
+
+    uint32_t bit_buffer;
+    int bit_buffer_index;
+    int bits_available;
 } vcodec_dec_ctx_t;
 
 vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type);

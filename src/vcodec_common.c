@@ -35,6 +35,26 @@ vcodec_status_t vcodec_write_exp_golomb_code(vcodec_enc_ctx_t *p_ctx, unsigned i
     return vcodec_bit_buffer_write(p_ctx, value + 1, num_bits);
 }
 
+vcodec_status_t vcodec_read_exp_golomb_code(vcodec_dec_ctx_t *p_ctx, unsigned int *p_value) {
+    uint32_t prefix = 0;
+    vcodec_status_t ret = VCODEC_STATUS_OK;
+    int num_bits = 0;
+    do {
+        num_bits++;
+        ret = vcodec_bit_buffer_read(p_ctx, &prefix, 1);
+        if (VCODEC_STATUS_OK != ret) {
+            return ret;
+        }
+    } while (prefix == 0);
+
+    *p_value = 1 << num_bits;
+    uint32_t data = 0;
+    ret = vcodec_bit_buffer_read(p_ctx, &data, num_bits - 1);
+    *p_value |= data;
+    *p_value--;
+    return ret;
+}
+
 vcodec_status_t vcodec_bit_buffer_write(vcodec_enc_ctx_t *p_ctx, uint32_t bits, int num_bits) {
     while (num_bits > 0) {
         const int to_write = MIN(num_bits, sizeof(p_ctx->bit_buffer) * 8 - p_ctx->bit_buffer_index);
@@ -53,6 +73,31 @@ vcodec_status_t vcodec_bit_buffer_write(vcodec_enc_ctx_t *p_ctx, uint32_t bits, 
         }
     }
 
+    return VCODEC_STATUS_OK;
+}
+
+vcodec_status_t vcodec_bit_buffer_read(vcodec_dec_ctx_t *p_ctx, uint32_t *bits, int num_bits) {
+    while (num_bits > 0) {
+        if (0 == p_ctx->bits_available) {
+            uint32_t num_read = 0;
+            vcodec_status_t status = p_ctx->read((const uint8_t *)&p_ctx->bit_buffer, sizeof(p_ctx->bit_buffer), &num_read, p_ctx->io_ctx);
+            if (VCODEC_STATUS_OK != status) {
+                return status;
+            }
+            p_ctx->bits_available = num_read * 8;
+            p_ctx->bit_buffer_index = 0;
+        }
+        const int to_read = MIN(num_bits, p_ctx->bits_available);
+        if (0 == to_read) {
+            return VCODEC_STATUS_EOF;
+        }
+        num_bits -= to_read;
+        const uint32_t mask = 32 == to_read ? 0xFFFFFFFF : (1 << to_read) - 1;
+        *bits |= (p_ctx->bit_buffer >> p_ctx->bit_buffer_index) & mask;
+        *bits <<= to_read;
+        p_ctx->bit_buffer_index += to_read;
+        p_ctx->bits_available -= to_read;
+    }
     return VCODEC_STATUS_OK;
 }
 

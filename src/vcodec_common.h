@@ -27,9 +27,11 @@ vcodec_status_t vcodec_write_elias_delta_code(vcodec_enc_ctx_t *p_ctx, unsigned 
 
 vcodec_status_t vcodec_write_exp_golomb_code(vcodec_enc_ctx_t *p_ctx, unsigned int value);
 
+vcodec_status_t vcodec_read_exp_golomb_code(vcodec_dec_ctx_t *p_ctx, unsigned int *p_value);
+
 vcodec_status_t vcodec_bit_buffer_write(vcodec_enc_ctx_t *p_ctx, uint32_t bits, int num_bits);
 
-vcodec_status_t vcodec_bit_buffer_read(vcodec_enc_ctx_t *p_ctx, uint32_t *bits, int num_bits);
+vcodec_status_t vcodec_bit_buffer_read(vcodec_dec_ctx_t *p_ctx, uint32_t *bits, int num_bits);
 
 vcodec_status_t vcodec_med_gr_init(vcodec_enc_ctx_t *p_ctx);
 

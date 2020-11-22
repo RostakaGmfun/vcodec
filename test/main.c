@@ -107,8 +107,8 @@ static void print_vcodec_stats(const vcodec_enc_ctx_t *p_ctx, clock_t diff) {
     avg_fps += ((diff * 1000) / CLOCKS_PER_SEC);
     total_time += diff;
     if (cnt % 100 == 0) {
-        fprintf(stderr, "Compressed size %luK, ratio %f%%, avg fps %fms, total time %lus\n", p_io_ctx->current_frame_size >> 10,
-                ((float)p_io_ctx->current_frame_size / total_size) * 100, avg_fps / cnt, total_time / CLOCKS_PER_SEC);
+        fprintf(stderr, "Compressed size %uK, ratio %f%%, avg fps %fms, total time %lus\n", p_io_ctx->out_size >> 10,
+                ((float)p_io_ctx->out_size / total_size) * 100, avg_fps / cnt, total_time / CLOCKS_PER_SEC);
     }
 }
 
@@ -140,8 +140,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Failed to open output file\n");
         return 1;
     }
-    fprintf(io_ctx.out_file, "YUV4MPEG2 W%d H%d F%d:%d I%c A%d:%d C%s\n", source_ctx.width, source_ctx.height, 30,
-        1, 'p', 0, 0, "mono");
+    //fprintf(io_ctx.out_file, "YUV4MPEG2 W%d H%d F%d:%d I%c A%d:%d C%s\n", source_ctx.width, source_ctx.height, 30, 1, 'p', 0, 0, "mono");
 
     uint8_t *p_framebuffer = malloc(source_ctx.frame_size);
     if (NULL == p_framebuffer) {
@@ -174,6 +173,8 @@ int main(int argc, char **argv) {
 
         print_vcodec_stats(&vcodec_enc_ctx, end_time - start_time);
         num_frames++;
+        fprintf(stderr, "Frame size %lu\n", io_ctx.current_frame_size);
+        io_ctx.current_frame_size = 0;
     }
 
     fprintf(stderr, "Finish encoding, status %d\n", vcodec_ret);

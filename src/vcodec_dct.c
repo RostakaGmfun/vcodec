@@ -1,5 +1,6 @@
 #include "vcodec/vcodec.h"
 #include "vcodec_common.h"
+#include "vcodec_transform.h"
 
 #include <string.h>
 #include <stdio.h>
