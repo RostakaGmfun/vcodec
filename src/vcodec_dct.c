@@ -36,12 +36,10 @@ static const int jpeg_zigzag_order4x4[4][4] = {
   {  9, 10, 14, 15, },
 };
 
-typedef enum {
-    PREDICTION_MODE_NONE,
-    PREDICTION_MODE_DC,
-    PREDICTION_MODE_HORIZONTAL,
-    PREDICTION_MODE_VERTICAL,
-} prediction_mode_t;
+static const int jpeg_zigzag_order2x2[2][2] = {
+  {  0,  1, },
+  {  2,  3, },
+};
 
 static vcodec_status_t vcodec_dct_process_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame);
 static vcodec_status_t vcodec_dct_reset(vcodec_enc_ctx_t *p_ctx);
@@ -50,16 +48,12 @@ static vcodec_status_t vcodec_dct_deinit(vcodec_enc_ctx_t *p_ctx);
 static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame);
 static vcodec_status_t encode_p_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame);
 
-static void predict_dc(int *pred_block, const uint8_t *ref_start, const int *p_src, int block_size, int ref_width);
-static void predict_horizontal(int *pred_block, const uint8_t *ref_start, const int *p_src, int block_size, int ref_width);
-static void predict_vertical(int *pred_block, const uint8_t *ref_start, const int *p_src, int block_size, int ref_width);
-static int compute_sad(const int *pred_block, const uint8_t *source, int block_size, int source_width);
-static int compute_block_sum(const int *source, int block_size);
-static prediction_mode_t predict_block(int *prediction, const uint8_t *p_ref_frame, int block_x, int block_y, const uint8_t *p_source_frame, int frame_width, int block_size);
-static void unpredict_block(int *reconstructed, const uint8_t *p_ref_frame, int x, int y, int block_size, int frame_width, prediction_mode_t pred_mode);
+static vcodec_status_t encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
+static vcodec_status_t encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
 
-static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
-static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
+static vcodec_status_t write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame);
+static vcodec_status_t write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int count);
+static vcodec_status_t write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode);
 
 vcodec_status_t vcodec_dct_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
@@ -104,7 +98,7 @@ static vcodec_status_t vcodec_dct_deinit(vcodec_enc_ctx_t *p_ctx) {
 }
 
 static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame) {
-    uint32_t macroblock_size = 16;
+    const uint32_t macroblock_size = 16;
     int quant[4*4] = {
         16,	11,	10,	16,
         12,	12,	14,	19,
@@ -116,10 +110,17 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
     int h = p_ctx->height / macroblock_size * macroblock_size;
     int y = 0;
+    vcodec_status_t ret = write_frame_header(p_ctx, true);
+    if (VCODEC_STATUS_OK != ret) {
+        return ret;
+    }
     for (; y < h; y += macroblock_size) {
         int x = 0;
         for (; x < p_ctx->width; x += macroblock_size) {
-            encode_macroblock_i(p_ctx, p_frame, x, y, quant, macroblock_size);
+            vcodec_status_t ret = encode_macroblock_i(p_ctx, p_frame, x, y, quant, macroblock_size);
+            if (VCODEC_STATUS_OK != ret) {
+                return ret;
+            }
         }
     }
     int reduced_macroblock_size;
@@ -131,7 +132,10 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
     for (; y < p_ctx->height; y += reduced_macroblock_size) {
         int x = 0;
         for (; x < p_ctx->width; x += reduced_macroblock_size) {
-            encode_macroblock_i(p_ctx, p_frame, x, y, quant, reduced_macroblock_size);
+            vcodec_status_t ret = encode_macroblock_i(p_ctx, p_frame, x, y, quant, reduced_macroblock_size);
+            if (VCODEC_STATUS_OK != ret) {
+                return ret;
+            }
         }
     }
 
@@ -144,8 +148,8 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
     double psnr = 20 * log10(255) - 10 * log10(mse_divided);
     fprintf(stderr, "PSNR %f mse %f\n", psnr, mse_divided);
     const char *frame_hdr = "FRAME\n";
-    p_ctx->write(frame_hdr, strlen(frame_hdr), p_ctx->io_ctx);
-    p_ctx->write(p_dct_ctx->p_ref_frame, p_ctx->width * p_ctx->height, p_ctx->io_ctx);
+    //p_ctx->write(frame_hdr, strlen(frame_hdr), p_ctx->io_ctx);
+    //p_ctx->write(p_dct_ctx->p_ref_frame, p_ctx->width * p_ctx->height, p_ctx->io_ctx);
 
     return VCODEC_STATUS_OK;
 }
@@ -154,177 +158,23 @@ static vcodec_status_t encode_p_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_
     return VCODEC_STATUS_OK;
 }
 
-static void predict_dc(int *pred_block, const uint8_t *ref_start, const int *p_src, int block_size, int ref_width) {
-    int dc_val = 0;
-    for (int i = 1; i < block_size; i++) {
-        dc_val += ref_start[i];
-    }
-
-    for (int i = 1; i < block_size; i++) {
-        dc_val += ref_start[i * ref_width];
-    }
-
-    const int pred = dc_val / (block_size * 2 - 1);
-    for (int i = 0; i < block_size; i++) {
-        for (int j = 0; j < block_size; j++) {
-            pred_block[i * block_size + j] = p_src[i * block_size + j] - pred;
-        }
-    }
-}
-
-static void predict_horizontal(int *pred_block, const uint8_t *ref_start, const int *p_src, int block_size, int ref_width) {
-    for (int i = 0; i < block_size; i++) {
-        const int pred_val = ref_start[i * ref_width];
-        for (int j = 0; j < block_size; j++) {
-            pred_block[i * block_size + j] = p_src[i * block_size + j] - pred_val;
-        }
-    }
-}
-
-static void predict_vertical(int *pred_block, const uint8_t *ref_start, const int *p_src, int block_size, int frame_width) {
-    for (int i = 0; i < block_size; i++) {
-        for (int j = 0; j < block_size; j++) {
-            pred_block[i * block_size + j] = p_src[i * block_size + j] - ref_start[j];
-        }
-    }
-}
-
-static void unpredict_dc(int *pred_block, const uint8_t *ref_start, int block_size, int ref_width) {
-    int dc_val = 0;
-    for (int i = 1; i < block_size; i++) {
-        dc_val += ref_start[i];
-    }
-
-    for (int i = 1; i < block_size; i++) {
-        dc_val += ref_start[i * ref_width];
-    }
-
-    const int pred = dc_val / (block_size * 2 - 1);
-    for (int i = 0; i < block_size; i++) {
-        for (int j = 0; j < block_size; j++) {
-            pred_block[i * block_size + j] += pred;
-        }
-    }
-}
-
-static void unpredict_horizontal(int *pred_block, const uint8_t *ref_start, int block_size, int ref_width) {
-    for (int i = 0; i < block_size; i++) {
-        const int pred_val = ref_start[i * ref_width];
-        for (int j = 0; j < block_size; j++) {
-            pred_block[i * block_size + j] += pred_val;
-        }
-    }
-}
-
-static void unpredict_vertical(int *pred_block, const uint8_t *ref_start, int block_size, int ref_width) {
-    for (int i = 0; i < block_size; i++) {
-        for (int j = 0; j < block_size; j++) {
-            pred_block[i * block_size + j] += ref_start[j];
-        }
-    }
-}
-
-static int compute_block_sum(const int *source, int block_size) {
-    int sum = 0;
-    for (int i = 0; i < block_size; i++) {
-        for (int j = 0; j < block_size; j++) {
-            sum += abs(source[i * block_size + j]);
-        }
-    }
-    return sum;
-}
-
-static prediction_mode_t predict_block(int *prediction, const uint8_t *p_ref_frame, int x, int y,
-        const uint8_t *p_source_frame, int frame_width, int block_size) {
-    int none_pred[block_size * block_size];
-    int horizontal_pred[block_size * block_size];
-    int vertical_pred[block_size * block_size];
-    int dc_pred[block_size * block_size];
-    int original_sum = INT_MAX;
-    int vertical_sum = INT_MAX;
-    int horizontal_sum = INT_MAX;
-    int dc_sum = INT_MAX;
-
-    debug_printf("PRED input:\n");
-    for (int i = 0; i < block_size; i++) {
-        for (int j = 0; j < block_size; j++) {
-            none_pred[i * block_size + j] = p_source_frame[(y + i) * frame_width + x + j];
-            debug_printf("%4d ", none_pred[i * block_size + j]);
-        }
-        debug_printf("\n");
-    }
-    debug_printf("\n");
-
-    if (0 == y && 0 == x) {
-        // No prediction is available for top-left block
-        memcpy(prediction, none_pred, sizeof(none_pred));
-        return PREDICTION_MODE_NONE;
-    } else if (0 == y) {
-        original_sum = compute_block_sum(none_pred, block_size);
-        predict_horizontal(horizontal_pred, p_ref_frame + y * frame_width + x - 1, none_pred, block_size, frame_width);
-        horizontal_sum = compute_block_sum(horizontal_pred, block_size);
-    } else if (0 == x) {
-        original_sum = compute_block_sum(none_pred, block_size);
-        predict_vertical(vertical_pred, p_ref_frame + (y - 1) * frame_width + x, none_pred, block_size, frame_width);
-        vertical_sum = compute_block_sum(vertical_pred, block_size);
-    } else {
-        original_sum = compute_block_sum(none_pred, block_size);
-
-        predict_horizontal(horizontal_pred, p_ref_frame + y * frame_width + x - 1, none_pred, block_size, frame_width);
-        horizontal_sum = compute_block_sum(horizontal_pred, block_size);
-
-        predict_vertical(vertical_pred, p_ref_frame + (y - 1) * frame_width + x, none_pred, block_size, frame_width);
-        vertical_sum = compute_block_sum(vertical_pred, block_size);
-
-        predict_dc(dc_pred, p_ref_frame + (y - 1) * frame_width + x - 1, none_pred, block_size, frame_width);
-        dc_sum = compute_block_sum(dc_pred, block_size);
-    }
-
-    debug_printf("Sums computed: %d %d %d %d\n", original_sum, dc_sum, horizontal_sum, vertical_sum);
-    const int min_sum = MIN(original_sum, MIN(dc_sum, MIN(vertical_sum, horizontal_sum)));
-    if (dc_sum == min_sum) {
-        memcpy(prediction, dc_pred, sizeof(dc_pred));
-        return PREDICTION_MODE_DC;
-    } else if (horizontal_sum == min_sum) {
-        memcpy(prediction, horizontal_pred, sizeof(horizontal_pred));
-        return PREDICTION_MODE_HORIZONTAL;
-    } else if (vertical_sum == min_sum) {
-        memcpy(prediction, vertical_pred, sizeof(vertical_pred));
-        return PREDICTION_MODE_VERTICAL;
-    } else {
-        memcpy(prediction, none_pred, sizeof(none_pred));
-        return PREDICTION_MODE_NONE;
-    }
-}
-
-static void unpredict_block(int *reconstructed, const uint8_t *p_ref_frame, int x, int y, int block_size, int frame_width, prediction_mode_t pred_mode) {
-    switch (pred_mode) {
-    case PREDICTION_MODE_NONE:
-        break;
-    case PREDICTION_MODE_DC:
-        unpredict_dc(reconstructed, p_ref_frame + (y - 1) * frame_width + x - 1, block_size, frame_width);
-        break;
-    case PREDICTION_MODE_HORIZONTAL:
-        unpredict_horizontal(reconstructed, p_ref_frame + y * frame_width + x - 1, block_size, frame_width);
-        break;
-    case PREDICTION_MODE_VERTICAL:
-        unpredict_vertical(reconstructed, p_ref_frame + (y - 1) * frame_width + x, block_size, frame_width);
-        break;
-    }
-}
-
-static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
+static vcodec_status_t encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
     const int block_size = 4;
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
     // Copy block to temp location
     int macroblock[macroblock_size * macroblock_size];
-    const prediction_mode_t pred_mode = predict_block(macroblock, p_dct_ctx->p_ref_frame, macroblock_x, macroblock_y, p_frame, p_ctx->width, macroblock_size);
+    const vcodec_prediction_mode_t pred_mode = vcodec_predict_block(macroblock, p_dct_ctx->p_ref_frame, macroblock_x, macroblock_y, p_frame, p_ctx->width, macroblock_size);
     debug_printf("Block predicted with %d:\n", pred_mode);
     for (int i = 0; i < macroblock_size; i++) {
         for (int j = 0; j < macroblock_size; j++) {
             debug_printf("%4d, ", macroblock[i * block_size + j]);
         }
         debug_printf("\n");
+    }
+
+    vcodec_status_t ret = write_macroblock_header(p_ctx, pred_mode);
+    if (VCODEC_STATUS_OK != ret) {
+        return ret;
     }
 
     for (int y = 0; y < macroblock_size; y += block_size) {
@@ -355,7 +205,15 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
                 debug_printf("%4d ", zigzag_block[i]);
             }
             debug_printf("\n");
+
+            // Don't write the DC coefficient yet
+            vcodec_status_t ret = write_coeffs(p_ctx, zigzag_block + 1, block_size * block_size - 1);
+            if (VCODEC_STATUS_OK != ret) {
+                return ret;
+            }
+
             for (int i = 0; i < block_size; i++) {
+                // Copy transformed coefficients ditrcly into the macroblock (reference framebuffer)
                 memcpy(macroblock + (y + i) * macroblock_size + x, rescaled_block + i * block_size, sizeof(int) * block_size);
             }
         }
@@ -377,13 +235,14 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
                     reconstructed_block[i * block_size + j] /= 16;
                     debug_printf("%4d ", reconstructed_block[i * block_size + j]);
                 }
+                // Copy reconstructed block back into reference framebuffer
                 memcpy(macroblock + (y + i) * macroblock_size + x, reconstructed_block + i * block_size, sizeof(int) * block_size);
                 debug_printf("\n");
             }
         }
     }
 
-    unpredict_block(macroblock, p_dct_ctx->p_ref_frame, macroblock_x, macroblock_y, macroblock_size, p_ctx->width, pred_mode);
+    vcodec_unpredict_block(macroblock, p_dct_ctx->p_ref_frame, macroblock_x, macroblock_y, macroblock_size, p_ctx->width, pred_mode);
     debug_printf("Reconstructed:\n");
     int sad = 0;
     for (int i = 0; i < macroblock_size; i++) {
@@ -397,9 +256,10 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
         debug_printf("\n");
     }
     debug_printf("SAD = %d at %4d %4d\n", sad, macroblock_x, macroblock_y);
+    return VCODEC_STATUS_OK;
 }
 
-static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
+static vcodec_status_t encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
     const int dc_block_size = macroblock_size / block_size;
     int dc_block[dc_block_size * dc_block_size];
     for (int y = 0; y < dc_block_size; y++) {
@@ -420,14 +280,26 @@ static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_q
         hadamard2x2(dc_block, dc_block);
     }
     debug_printf("DC hadamard:\n");
+    int zigzag_block[dc_block_size * dc_block_size];
     for (int y = 0; y < dc_block_size; y++) {
         for (int x = 0; x < dc_block_size; x++) {
             dc_block[y * dc_block_size + x] /= p_quant[y * block_size + x];
+            if (4 == dc_block_size) {
+                zigzag_block[jpeg_zigzag_order4x4[x][y]] = dc_block[y * block_size + x];
+            } else {
+                zigzag_block[jpeg_zigzag_order2x2[x][y]] = dc_block[y * block_size + x];
+            }
             debug_printf("%3d ", dc_block[y * block_size + x]);
             dc_block[y * dc_block_size + x] *= p_quant[y * block_size + x];
         }
         debug_printf("\n");
     }
+
+    vcodec_status_t ret = write_coeffs(p_ctx, zigzag_block, dc_block_size * dc_block_size);
+    if (VCODEC_STATUS_OK != ret) {
+        return ret;
+    }
+
     if (4 == dc_block_size) {
         ihadamard4x4(dc_block, dc_block);
     } else {
@@ -446,4 +318,51 @@ static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_q
             p_macroblock[y * dc_block_size * macroblock_size + x * dc_block_size] = dc_block[y * dc_block_size + x];
         }
     }
+
+    return VCODEC_STATUS_OK;
+}
+
+static vcodec_status_t write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame) {
+    return vcodec_bit_buffer_write(p_ctx, is_key_frame, 1);
+}
+
+static vcodec_status_t write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode) {
+    uint32_t val = pred_mode;
+    return vcodec_bit_buffer_write(p_ctx, val, 2);
+}
+
+static vcodec_status_t write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int cnt) {
+    vcodec_status_t ret = VCODEC_STATUS_OK;
+    int zero_run_length = 0;
+    unsigned int sign_buffer = 0;
+    cnt--;
+    while (cnt >= 0) {
+        if (0 == p_coeffs[cnt--]) {
+            zero_run_length++;
+        } else {
+            ret = vcodec_write_exp_golomb_code(p_ctx, zero_run_length);
+            if (VCODEC_STATUS_OK != ret) {
+                return ret;
+            }
+            zero_run_length = 0;
+            // Save coefficient sign to write it later
+            sign_buffer |= p_coeffs[cnt] > 0;
+            sign_buffer <<= 1;
+            // Write absolute coefficient value minus one (can't be non-zero)
+            ret = vcodec_write_exp_golomb_code(p_ctx, abs(p_coeffs[cnt]) - 1);
+            if (VCODEC_STATUS_OK != ret) {
+                return ret;
+            }
+        }
+    }
+
+    if (0 != zero_run_length) {
+        ret = vcodec_write_exp_golomb_code(p_ctx, zero_run_length);
+        if (VCODEC_STATUS_OK != ret) {
+            return ret;
+        }
+    }
+
+    const int num_bits = sizeof(int) * 8 - 1 - __builtin_clz(sign_buffer);
+    return vcodec_bit_buffer_write(p_ctx, sign_buffer, num_bits);
 }
