@@ -110,6 +110,8 @@ static vcodec_status_t decode_key_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_fram
             decode_macroblock_i(p_ctx, p_frame, x, y, quant, reduced_macroblock_size);
         }
     }
+    dec_ctx_t *p_dct_ctx = p_ctx->decoder_ctx;
+    memcpy(p_frame, p_dct_ctx->p_ref_frame, p_ctx->width * p_ctx->height);
 }
 
 static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
@@ -239,6 +241,7 @@ static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int c
     if (VCODEC_STATUS_OK != ret) {
         return ret;
     }
+    num_zeroes = (num_zeroes + cnt - 1) % cnt;
     int num = cnt; // save cnt for later processing
     // First zeroes run length might be equal to cnt, so that loop is never executed
     cnt -= num_zeroes;
@@ -248,7 +251,7 @@ static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int c
         if (VCODEC_STATUS_OK != ret) {
             return ret;
         }
-        p_coeffs[cnt - 1] = absval;
+        p_coeffs[cnt - 1] = absval + 1;
         sign_buffer_size++;
         ret = vcodec_read_exp_golomb_code(p_ctx, &num_zeroes);
         if (VCODEC_STATUS_OK != ret) {

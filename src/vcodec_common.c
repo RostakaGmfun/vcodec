@@ -80,7 +80,7 @@ vcodec_status_t vcodec_bit_buffer_read(vcodec_dec_ctx_t *p_ctx, uint32_t *bits, 
     while (num_bits > 0) {
         if (0 == p_ctx->bits_available) {
             uint32_t num_read = 0;
-            vcodec_status_t status = p_ctx->read((const uint8_t *)&p_ctx->bit_buffer, sizeof(p_ctx->bit_buffer), &num_read, p_ctx->io_ctx);
+            vcodec_status_t status = p_ctx->read((uint8_t *)&p_ctx->bit_buffer, sizeof(p_ctx->bit_buffer), &num_read, p_ctx->io_ctx);
             if (VCODEC_STATUS_OK != status) {
                 return status;
             }
@@ -119,7 +119,7 @@ vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type) {
 vcodec_status_t vcodec_dec_init(vcodec_dec_ctx_t *p_ctx, vcodec_type_t type) {
     switch (type) {
     case VCODEC_TYPE_DCT:
-        //return vcodec_dec_dct_init(p_ctx);
+        return vcodec_dec_dct_init(p_ctx);
     default:
         return VCODEC_STATUS_INVAL;
     }

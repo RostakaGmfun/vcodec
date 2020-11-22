@@ -8,3 +8,5 @@ target_compile_options(vcodec PRIVATE -ggdb3)
 
 add_executable(vcodec-test test/main.c src/tools/source.c src/tools/y4m.c)
 target_link_libraries(vcodec-test vcodec m)
+add_executable(vcodec-dec-test test/decoder_test.c)
+target_link_libraries(vcodec-dec-test vcodec m)

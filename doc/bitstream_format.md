@@ -60,7 +60,7 @@ Typical line (15 values):
 `5   6   -1   -5    0    0    0    1    1    0    0    0    0    0    0 `
 
 AC coefficients for all blocks:
-(exp-golomb coded absolute value minus one, num zeroes until next coefficient or end):
+((num_trailing_zeroes + 1) mod total number of coefficients)(exp-golomb coded absolute value minus one, num zeroes until next coefficient or end):
 (6), (1, 0), (1, 3), (5, 0), (1, 0), (6, 0), (5) -> inverse
 (00110), (0, 0), (0, 011), (001100, 0), (0, 0), (001110, 0), (001100) -> 00111000001110011000000011100001100
 (5, 0), (6, 0), (1, 0), (5, 3), (1, 0), (1, 5) -> (binary format)

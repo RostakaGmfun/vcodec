@@ -113,10 +113,6 @@ static void print_vcodec_stats(const vcodec_enc_ctx_t *p_ctx, clock_t diff) {
 }
 
 int main(int argc, char **argv) {
-    enum {
-        SOURCE_CAPTURE,
-        SOURCE_PGM,
-    } source = argc == 2 ? SOURCE_CAPTURE : SOURCE_PGM;
     if (argc != 2 && argc != 3) {
         fprintf(stderr, "Wrong number of args %d\n", argc);
         return EXIT_FAILURE;

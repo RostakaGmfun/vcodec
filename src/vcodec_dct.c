@@ -336,11 +336,16 @@ static vcodec_status_t write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs
     vcodec_status_t ret = VCODEC_STATUS_OK;
     int zero_run_length = 0;
     unsigned int sign_buffer = 0;
+    int sign_buffer_size = 0;
+    const int total = cnt;
     cnt--;
     while (cnt >= 0) {
         if (0 == p_coeffs[cnt--]) {
             zero_run_length++;
         } else {
+            // count of trailing zeroes is circle-shifted by one to allow for short one-bit code (1) to signify that the block is all-zeroes
+            // 1 trailing zero will be coded as 2 (2 -> 0011), 14 trailing zeroes for ac coeffs will be coded as 15
+            const int zrl_val = (zero_run_length + (sign_buffer_size == 0)) % total;
             ret = vcodec_write_exp_golomb_code(p_ctx, zero_run_length);
             if (VCODEC_STATUS_OK != ret) {
                 return ret;
@@ -349,21 +354,22 @@ static vcodec_status_t write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs
             // Save coefficient sign to write it later
             sign_buffer |= p_coeffs[cnt] > 0;
             sign_buffer <<= 1;
-            // Write absolute coefficient value minus one (can't be non-zero)
+            sign_buffer_size++;
+            // Write absolute coefficient value minus one (can't be zero)
             ret = vcodec_write_exp_golomb_code(p_ctx, abs(p_coeffs[cnt]) - 1);
             if (VCODEC_STATUS_OK != ret) {
                 return ret;
             }
         }
     }
-
-    if (0 != zero_run_length) {
+    if (total == zero_run_length) {
+        return vcodec_write_exp_golomb_code(p_ctx, 0);
+    } else if (0 != zero_run_length) {
         ret = vcodec_write_exp_golomb_code(p_ctx, zero_run_length);
         if (VCODEC_STATUS_OK != ret) {
             return ret;
         }
     }
 
-    const int num_bits = sizeof(int) * 8 - 1 - __builtin_clz(sign_buffer);
-    return vcodec_bit_buffer_write(p_ctx, sign_buffer, num_bits);
+    return vcodec_bit_buffer_write(p_ctx, sign_buffer, sign_buffer_size);
 }

@@ -21,7 +21,7 @@ typedef enum {
 } vcodec_type_t;
 
 typedef vcodec_status_t (*vcodec_write_t)(const uint8_t *p_data, uint32_t size, void *ctx);
-typedef vcodec_status_t (*vcodec_read_t)(const uint8_t *p_data, uint32_t size, uint32_t *num_read, void *ctx);
+typedef vcodec_status_t (*vcodec_read_t)(uint8_t *p_data, uint32_t size, uint32_t *num_read, void *ctx);
 typedef void *(*vcodec_alloc_t)(size_t size);
 typedef void (*vcodec_free_t)(void *ptr);
 
