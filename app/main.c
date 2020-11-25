@@ -78,6 +78,7 @@ static int pgm_read(const char *path, pgm_file_t *file) {
 
 static vcodec_status_t vcodec_write(const uint8_t *p_data, uint32_t size, void *ctx) {
     io_ctx_t *p_io_ctx = ctx;
+    return VCODEC_STATUS_OK;
     if (fwrite(p_data, size, 1, p_io_ctx->out_file) != 1) {
         return VCODEC_STATUS_IO_FAILED;
     }
