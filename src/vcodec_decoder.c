@@ -1,4 +1,5 @@
 #include "vcodec/vcodec.h"
+#include "vcodec/bitstream.h"
 #include "vcodec_common.h"
 #include "vcodec_transform.h"
 
@@ -9,7 +10,7 @@
 #include <math.h>
 #include <limits.h>
 
-#define debug_printf
+#define debug_printf printf
 #define GOP 1
 
 typedef struct {
@@ -90,6 +91,7 @@ static vcodec_status_t decode_key_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_fram
         14,	13,	16,	24,
         14,	17,	22,	29,
     };
+    printf("Key frame\n");
     int h = p_ctx->height / macroblock_size * macroblock_size;
     int y = 0;
     for (; y < h; y += macroblock_size) {
@@ -219,16 +221,18 @@ static vcodec_status_t decode_p_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame)
 
 static vcodec_status_t read_frame_header(vcodec_dec_ctx_t *p_ctx, bool *p_is_key_frame) {
     uint32_t val = 0;
-    vcodec_status_t ret = vcodec_bit_buffer_read(p_ctx, &val, 1);
+    vcodec_bitstream_reader_getbits(p_ctx->bitstream_reader, &val, 1);
     *p_is_key_frame = (bool)val;
-    return ret;
+    printf("FRM hdr %d\n", val);
+    return vcodec_bitstream_reader_status(p_ctx->bitstream_reader);
 }
 
 static vcodec_status_t read_macroblock_header(vcodec_dec_ctx_t *p_ctx, vcodec_prediction_mode_t *p_pred_mode) {
     uint32_t val;
-    vcodec_status_t ret = vcodec_bit_buffer_read(p_ctx, &val, 2);
+    vcodec_bitstream_reader_getbits(p_ctx->bitstream_reader, &val, 2);
     *p_pred_mode = val;
-    return ret;
+    printf("MB hdr %d\n", val);
+    return vcodec_bitstream_reader_status(p_ctx->bitstream_reader);
 }
 
 static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int cnt) {
@@ -237,37 +241,28 @@ static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int c
     int sign_buffer_size = 0;
     memset(p_coeffs, 0, sizeof(int) * cnt);
     uint32_t num_zeroes = 0;
-    ret = vcodec_read_exp_golomb_code(p_ctx, &num_zeroes);
-    if (VCODEC_STATUS_OK != ret) {
-        return ret;
-    }
+    num_zeroes = vcodec_bitstream_reader_read_exp_golomb(p_ctx->bitstream_reader);
+    printf("Read coefs num_zeroes %d\n", num_zeroes);
     num_zeroes = (num_zeroes + cnt - 1) % cnt;
+    printf("Read coefs num_zeroes decoded %d\n", num_zeroes);
     int num = cnt; // save cnt for later processing
     // First zeroes run length might be equal to cnt, so that loop is never executed
     cnt -= num_zeroes;
     while (cnt > 0) {
-        uint32_t absval = 0;
-        ret = vcodec_read_exp_golomb_code(p_ctx, &absval);
-        if (VCODEC_STATUS_OK != ret) {
-            return ret;
-        }
+        uint32_t absval = vcodec_bitstream_reader_read_exp_golomb(p_ctx->bitstream_reader);
         p_coeffs[cnt - 1] = absval + 1;
         sign_buffer_size++;
-        ret = vcodec_read_exp_golomb_code(p_ctx, &num_zeroes);
-        if (VCODEC_STATUS_OK != ret) {
-            return ret;
-        }
+        cnt--;
+        num_zeroes = vcodec_bitstream_reader_read_exp_golomb(p_ctx->bitstream_reader);
         cnt -= num_zeroes;
     }
-    ret = vcodec_bit_buffer_read(p_ctx, &sign_buffer, sign_buffer_size);
-    if (VCODEC_STATUS_OK != ret) {
-        return ret;
-    }
+    vcodec_bitstream_reader_getbits(p_ctx->bitstream_reader, &sign_buffer, sign_buffer_size);
     while (num > 0) {
         if (p_coeffs[num - 1] != 0) {
             p_coeffs[num - 1] *= (sign_buffer & (1 << sign_buffer_size)) ? 1 : -1;
             sign_buffer <<= 1;
         }
+        num--;
     }
     return ret;
 }

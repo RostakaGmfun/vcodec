@@ -36,12 +36,15 @@ typedef struct vcodec_dec_ctx vcodec_dec_ctx_t;
 typedef vcodec_status_t (*vcodec_dec_get_frame_t)(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame);
 typedef vcodec_status_t (*vcodec_dec_deinit_t)(vcodec_dec_ctx_t *p_ctx);
 
+typedef struct vcodec_bitstream_writer vcodec_bitstream_writer_t;
+typedef struct vcodec_bitstream_reader vcodec_bitstream_reader_t;
+
 typedef struct vcodec_enc_ctx {
     uint32_t width;
     uint32_t height;
     uint8_t *p_buffer;
     size_t buffer_size;
-    uint32_t bit_buffer;
+    uint8_t bit_buffer;
     int bit_buffer_index;
 
     vcodec_write_t write;
@@ -54,6 +57,7 @@ typedef struct vcodec_enc_ctx {
     vcodec_enc_deinit_t deinit;
     vcodec_type_t encoder_type;
     void *encoder_ctx;
+    vcodec_bitstream_writer_t *bitstream_writer;
 } vcodec_enc_ctx_t;
 
 typedef struct vcodec_dec_ctx {
@@ -72,6 +76,7 @@ typedef struct vcodec_dec_ctx {
     uint32_t bit_buffer;
     int bit_buffer_index;
     int bits_available;
+    vcodec_bitstream_reader_t *bitstream_reader;
 } vcodec_dec_ctx_t;
 
 vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type);

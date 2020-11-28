@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <string.h>
 
 #include "vcodec.h"
 
@@ -9,7 +10,7 @@
 #define VCODEC_BITSTREAM_WRITER_BUFFER_LEN 8
 #define VCODEC_BITSTREAM_READER_BUFFER_LEN 8
 
-typedef struct vodec_bitstream_writer {
+typedef struct vcodec_bitstream_writer {
     uint8_t buffer[VCODEC_BITSTREAM_WRITER_BUFFER_LEN];
     uint32_t bit_pos;
     void *p_io_ctx;
@@ -17,7 +18,7 @@ typedef struct vodec_bitstream_writer {
     vcodec_status_t last_status;
 } vcodec_bitstream_writer_t;
 
-typedef struct vodec_bitstream_reader {
+typedef struct vcodec_bitstream_reader {
     uint8_t buffer[VCODEC_BITSTREAM_READER_BUFFER_LEN];
     uint32_t bits_available;
     uint32_t bit_pos;
@@ -113,6 +114,10 @@ static inline void vcodec_bitstream_writer_write_exp_golomb(vcodec_bitstream_wri
     const int num_bits = sizeof(uint32_t) * 8 - __builtin_clz(value + 1);
     vcodec_bitstream_writer_putzeroes(p_writer, num_bits - 1);
     vcodec_bitstream_writer_putbits(p_writer, value + 1, num_bits);
+}
+
+static inline vcodec_status_t vcodec_bitstream_reader_status(vcodec_bitstream_reader_t *p_reader) {
+    return p_reader->last_status;
 }
 
 /**

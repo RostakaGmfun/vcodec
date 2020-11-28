@@ -1,114 +1,29 @@
 #include "vcodec/vcodec.h"
 #include "vcodec_common.h"
+#include "vcodec/bitstream.h"
 #include <stdlib.h>
 #include <limits.h>
 #include <string.h>
+#include <stdio.h>
 
 //#define debug_printf printf
 #define debug_printf
 
-vcodec_status_t vcodec_write_elias_delta_code(vcodec_enc_ctx_t *p_ctx, unsigned int value) {
-    const int num_bits  = sizeof(int) * 8 - 1 - __builtin_clz(value);
-    const int num_bits2 = sizeof(int) * 8 - 1 - __builtin_clz(num_bits);
-    const int zero_prefix = 0;
-    vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, zero_prefix, num_bits2 - 1);
-    if (VCODEC_STATUS_OK != status) {
-        return status;
-    }
-
-    status = vcodec_bit_buffer_write(p_ctx, num_bits, num_bits2);
-    if (VCODEC_STATUS_OK != status) {
-        return status;
-    }
-
-    return vcodec_bit_buffer_write(p_ctx, value, num_bits - 1);
-}
-
-vcodec_status_t vcodec_write_exp_golomb_code(vcodec_enc_ctx_t *p_ctx, unsigned int value) {
-    const int num_bits  = sizeof(int) * 8 - 1 - __builtin_clz(value + 1);
-    const int zero_prefix = 0;
-    vcodec_status_t status = vcodec_bit_buffer_write(p_ctx, zero_prefix, num_bits - 1);
-    if (VCODEC_STATUS_OK != status) {
-        return status;
-    }
-
-    return vcodec_bit_buffer_write(p_ctx, value + 1, num_bits);
-}
-
-vcodec_status_t vcodec_read_exp_golomb_code(vcodec_dec_ctx_t *p_ctx, unsigned int *p_value) {
-    uint32_t prefix = 0;
-    vcodec_status_t ret = VCODEC_STATUS_OK;
-    int num_bits = 0;
-    do {
-        num_bits++;
-        ret = vcodec_bit_buffer_read(p_ctx, &prefix, 1);
-        if (VCODEC_STATUS_OK != ret) {
-            return ret;
-        }
-    } while (prefix == 0);
-
-    *p_value = 1 << num_bits;
-    uint32_t data = 0;
-    ret = vcodec_bit_buffer_read(p_ctx, &data, num_bits - 1);
-    *p_value |= data;
-    *p_value--;
-    return ret;
-}
-
-vcodec_status_t vcodec_bit_buffer_write(vcodec_enc_ctx_t *p_ctx, uint32_t bits, int num_bits) {
-    while (num_bits > 0) {
-        const int to_write = MIN(num_bits, sizeof(p_ctx->bit_buffer) * 8 - p_ctx->bit_buffer_index);
-        num_bits -= to_write;
-        const uint32_t mask = 32 == to_write ? 0xFFFFFFFF : (1 << to_write) - 1;
-        p_ctx->bit_buffer |= (bits & mask) << p_ctx->bit_buffer_index;
-        p_ctx->bit_buffer_index += to_write;
-        bits >> to_write;
-        if (sizeof(p_ctx->bit_buffer) * 8 == p_ctx->bit_buffer_index) {
-            vcodec_status_t status = p_ctx->write((const uint8_t *)&p_ctx->bit_buffer, sizeof(p_ctx->bit_buffer), p_ctx->io_ctx);
-            if (VCODEC_STATUS_OK != status) {
-                return status;
-            }
-            p_ctx->bit_buffer = 0;
-            p_ctx->bit_buffer_index = 0;
-        }
-    }
-
-    return VCODEC_STATUS_OK;
-}
-
-vcodec_status_t vcodec_bit_buffer_read(vcodec_dec_ctx_t *p_ctx, uint32_t *bits, int num_bits) {
-    while (num_bits > 0) {
-        if (0 == p_ctx->bits_available) {
-            uint32_t num_read = 0;
-            vcodec_status_t status = p_ctx->read((uint8_t *)&p_ctx->bit_buffer, sizeof(p_ctx->bit_buffer), &num_read, p_ctx->io_ctx);
-            if (VCODEC_STATUS_OK != status) {
-                return status;
-            }
-            p_ctx->bits_available = num_read * 8;
-            p_ctx->bit_buffer_index = 0;
-        }
-        const int to_read = MIN(num_bits, p_ctx->bits_available);
-        if (0 == to_read) {
-            return VCODEC_STATUS_EOF;
-        }
-        num_bits -= to_read;
-        const uint32_t mask = 32 == to_read ? 0xFFFFFFFF : (1 << to_read) - 1;
-        *bits |= (p_ctx->bit_buffer >> p_ctx->bit_buffer_index) & mask;
-        *bits <<= to_read;
-        p_ctx->bit_buffer_index += to_read;
-        p_ctx->bits_available -= to_read;
-    }
-    return VCODEC_STATUS_OK;
-}
-
 vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type) {
+    p_ctx->bitstream_writer = p_ctx->alloc(sizeof(vcodec_bitstream_writer_t));
+    memset(p_ctx->bitstream_writer, 0, sizeof(sizeof(vcodec_bitstream_writer_t)));
+    p_ctx->bitstream_writer->p_io_ctx = p_ctx->io_ctx;
+    p_ctx->bitstream_writer->write = p_ctx->write;
+
     switch (type) {
+        /*
     case VCODEC_TYPE_MED_GR:
         return vcodec_med_gr_init(p_ctx);
     case VCODEC_TYPE_INTER:
         return vcodec_inter_init(p_ctx);
     case VCODEC_TYPE_VEC:
         return vcodec_vec_init(p_ctx);
+        */
     case VCODEC_TYPE_DCT:
         return vcodec_dct_init(p_ctx);
     default:
@@ -117,6 +32,10 @@ vcodec_status_t vcodec_enc_init(vcodec_enc_ctx_t *p_ctx, vcodec_type_t type) {
 }
 
 vcodec_status_t vcodec_dec_init(vcodec_dec_ctx_t *p_ctx, vcodec_type_t type) {
+    p_ctx->bitstream_reader = p_ctx->alloc(sizeof(vcodec_bitstream_reader_t));
+    memset(p_ctx->bitstream_reader, 0, sizeof(sizeof(vcodec_bitstream_reader_t)));
+    p_ctx->bitstream_reader->p_io_ctx = p_ctx->io_ctx;
+    p_ctx->bitstream_reader->read = p_ctx->read;
     switch (type) {
     case VCODEC_TYPE_DCT:
         return vcodec_dec_dct_init(p_ctx);

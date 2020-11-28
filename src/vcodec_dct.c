@@ -1,6 +1,7 @@
 #include "vcodec/vcodec.h"
 #include "vcodec_common.h"
 #include "vcodec_transform.h"
+#include "vcodec/bitstream.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -49,12 +50,12 @@ static vcodec_status_t vcodec_dct_deinit(vcodec_enc_ctx_t *p_ctx);
 static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame);
 static vcodec_status_t encode_p_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame);
 
-static vcodec_status_t encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
-static vcodec_status_t encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
+static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
+static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
 
-static vcodec_status_t write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame);
-static vcodec_status_t write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int count);
-static vcodec_status_t write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode);
+static void write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame);
+static void write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int count);
+static void write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode);
 
 vcodec_status_t vcodec_dct_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
@@ -111,17 +112,11 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
     int h = p_ctx->height / macroblock_size * macroblock_size;
     int y = 0;
-    vcodec_status_t ret = write_frame_header(p_ctx, true);
-    if (VCODEC_STATUS_OK != ret) {
-        return ret;
-    }
+    write_frame_header(p_ctx, true);
     for (; y < h; y += macroblock_size) {
         int x = 0;
         for (; x < p_ctx->width; x += macroblock_size) {
-            vcodec_status_t ret = encode_macroblock_i(p_ctx, p_frame, x, y, quant, macroblock_size);
-            if (VCODEC_STATUS_OK != ret) {
-                return ret;
-            }
+            encode_macroblock_i(p_ctx, p_frame, x, y, quant, macroblock_size);
         }
     }
     int reduced_macroblock_size;
@@ -133,10 +128,7 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
     for (; y < p_ctx->height; y += reduced_macroblock_size) {
         int x = 0;
         for (; x < p_ctx->width; x += reduced_macroblock_size) {
-            vcodec_status_t ret = encode_macroblock_i(p_ctx, p_frame, x, y, quant, reduced_macroblock_size);
-            if (VCODEC_STATUS_OK != ret) {
-                return ret;
-            }
+            encode_macroblock_i(p_ctx, p_frame, x, y, quant, reduced_macroblock_size);
         }
     }
 
@@ -152,14 +144,14 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
     //p_ctx->write(frame_hdr, strlen(frame_hdr), p_ctx->io_ctx);
     //p_ctx->write(p_dct_ctx->p_ref_frame, p_ctx->width * p_ctx->height, p_ctx->io_ctx);
 
-    return VCODEC_STATUS_OK;
+    return vcodec_bitstream_writer_status(p_ctx->bitstream_writer);
 }
 
 static vcodec_status_t encode_p_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame) {
     return VCODEC_STATUS_OK;
 }
 
-static vcodec_status_t encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
+static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
     const int block_size = 4;
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
     // Copy block to temp location
@@ -173,10 +165,7 @@ static vcodec_status_t encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_
         debug_printf("\n");
     }
 
-    vcodec_status_t ret = write_macroblock_header(p_ctx, pred_mode);
-    if (VCODEC_STATUS_OK != ret) {
-        return ret;
-    }
+    write_macroblock_header(p_ctx, pred_mode);
 
     for (int y = 0; y < macroblock_size; y += block_size) {
         for (int x = 0; x < macroblock_size; x += block_size) {
@@ -208,10 +197,7 @@ static vcodec_status_t encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_
             debug_printf("\n");
 
             // Don't write the DC coefficient yet
-            vcodec_status_t ret = write_coeffs(p_ctx, zigzag_block + 1, block_size * block_size - 1);
-            if (VCODEC_STATUS_OK != ret) {
-                return ret;
-            }
+            write_coeffs(p_ctx, zigzag_block + 1, block_size * block_size - 1);
 
             for (int i = 0; i < block_size; i++) {
                 // Copy transformed coefficients ditrcly into the macroblock (reference framebuffer)
@@ -257,10 +243,9 @@ static vcodec_status_t encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_
         debug_printf("\n");
     }
     debug_printf("SAD = %d at %4d %4d\n", sad, macroblock_x, macroblock_y);
-    return VCODEC_STATUS_OK;
 }
 
-static vcodec_status_t encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
+static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
     const int dc_block_size = macroblock_size / block_size;
     int dc_block[dc_block_size * dc_block_size];
     for (int y = 0; y < dc_block_size; y++) {
@@ -296,10 +281,7 @@ static vcodec_status_t encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, con
         debug_printf("\n");
     }
 
-    vcodec_status_t ret = write_coeffs(p_ctx, zigzag_block, dc_block_size * dc_block_size);
-    if (VCODEC_STATUS_OK != ret) {
-        return ret;
-    }
+    write_coeffs(p_ctx, zigzag_block, dc_block_size * dc_block_size);
 
     if (4 == dc_block_size) {
         ihadamard4x4(dc_block, dc_block);
@@ -319,57 +301,51 @@ static vcodec_status_t encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, con
             p_macroblock[y * dc_block_size * macroblock_size + x * dc_block_size] = dc_block[y * dc_block_size + x];
         }
     }
-
-    return VCODEC_STATUS_OK;
 }
 
-static vcodec_status_t write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame) {
-    return vcodec_bit_buffer_write(p_ctx, is_key_frame, 1);
+static void write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame) {
+    //printf("FRM hdr %d\n", is_key_frame);
+    vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, is_key_frame, 1);
 }
 
-static vcodec_status_t write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode) {
+static void write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode) {
     uint32_t val = pred_mode;
-    return vcodec_bit_buffer_write(p_ctx, val, 2);
+    //printf("MB hdr %d\n", val);
+    vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, val, 2);
 }
 
-static vcodec_status_t write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int cnt) {
-    vcodec_status_t ret = VCODEC_STATUS_OK;
+static void write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int cnt) {
     int zero_run_length = 0;
     unsigned int sign_buffer = 0;
     int sign_buffer_size = 0;
     const int total = cnt;
     cnt--;
     while (cnt >= 0) {
-        if (0 == p_coeffs[cnt--]) {
+        if (0 == p_coeffs[cnt]) {
             zero_run_length++;
         } else {
             // count of trailing zeroes is circle-shifted by one to allow for short one-bit code (1) to signify that the block is all-zeroes
             // 1 trailing zero will be coded as 2 (2 -> 0011), 14 trailing zeroes for ac coeffs will be coded as 15
             const int zrl_val = (zero_run_length + (sign_buffer_size == 0)) % total;
-            ret = vcodec_write_exp_golomb_code(p_ctx, zero_run_length);
-            if (VCODEC_STATUS_OK != ret) {
-                return ret;
-            }
+            vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, zero_run_length);
+            //printf("zero_run_length %d %d\n", zero_run_length, zrl_val);
             zero_run_length = 0;
             // Save coefficient sign to write it later
             sign_buffer |= p_coeffs[cnt] > 0;
             sign_buffer <<= 1;
             sign_buffer_size++;
             // Write absolute coefficient value minus one (can't be zero)
-            ret = vcodec_write_exp_golomb_code(p_ctx, abs(p_coeffs[cnt]) - 1);
-            if (VCODEC_STATUS_OK != ret) {
-                return ret;
-            }
+            vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, abs(p_coeffs[cnt]) - 1);
+            //printf("abs_val %d\n", abs(p_coeffs[cnt]) - 1);
         }
+        cnt--;
     }
     if (total == zero_run_length) {
-        return vcodec_write_exp_golomb_code(p_ctx, 0);
+        vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, 0);
+        return;
     } else if (0 != zero_run_length) {
-        ret = vcodec_write_exp_golomb_code(p_ctx, zero_run_length);
-        if (VCODEC_STATUS_OK != ret) {
-            return ret;
-        }
+        vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, zero_run_length);
     }
 
-    return vcodec_bit_buffer_write(p_ctx, sign_buffer, sign_buffer_size);
+    vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, sign_buffer, sign_buffer_size);
 }
