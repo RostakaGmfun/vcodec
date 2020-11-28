@@ -2,6 +2,7 @@
 #include "vcodec/bitstream.h"
 #include "vcodec_common.h"
 #include "vcodec_transform.h"
+#include "vcodec_entropy_coding.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -10,7 +11,8 @@
 #include <math.h>
 #include <limits.h>
 
-#define debug_printf printf
+//#define debug_printf printf
+#define debug_printf
 #define GOP 1
 
 typedef struct {
@@ -25,6 +27,11 @@ static const int jpeg_zigzag_order4x4[4][4] = {
   {  9, 10, 14, 15, },
 };
 
+static const int jpeg_zigzag_order2x2[2][2] = {
+  {  0,  1, },
+  {  2,  3, },
+};
+
 static vcodec_status_t vcodec_dec_get_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_frame);
 static vcodec_status_t vcodec_dec_deinit(vcodec_dec_ctx_t *p_ctx);
 
@@ -35,7 +42,6 @@ static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_f
 static void decode_dc(vcodec_dec_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
 
 static vcodec_status_t read_frame_header(vcodec_dec_ctx_t *p_ctx, bool *p_is_key_frame);
-static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int num);
 static vcodec_status_t read_macroblock_header(vcodec_dec_ctx_t *p_ctx, vcodec_prediction_mode_t *p_pred_mode);
 
 vcodec_status_t vcodec_dec_dct_init(vcodec_dec_ctx_t *p_ctx) {
@@ -92,6 +98,7 @@ static vcodec_status_t decode_key_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_fram
         14,	17,	22,	29,
     };
     printf("Key frame\n");
+    //printf("Key frame\n");
     int h = p_ctx->height / macroblock_size * macroblock_size;
     int y = 0;
     for (; y < h; y += macroblock_size) {
@@ -132,9 +139,7 @@ static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_f
         for (int x = 0; x < macroblock_size; x += block_size) {
             int zigzag_block[block_size * block_size];
             zigzag_block[0] = 0; // DC to be filled later
-            if (VCODEC_STATUS_OK != (ret = read_coeffs(p_ctx, zigzag_block + 1, block_size * block_size - 1))) {
-                return ret;
-            }
+            ret = vcodec_ec_read_coeffs(p_ctx->bitstream_reader, zigzag_block + 1, block_size * block_size - 1);
             debug_printf("AC COEFFS:\n");
             for (int i = 1; i < block_size * block_size; i++) {
                 debug_printf("%4d ", zigzag_block[i]);
@@ -194,7 +199,20 @@ static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_f
 static void decode_dc(vcodec_dec_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size) {
     const int dc_block_size = macroblock_size / block_size;
     int dc_block[dc_block_size * dc_block_size];
-    read_coeffs(p_ctx, dc_block, dc_block_size * dc_block_size);
+    int zigzag_block[dc_block_size * dc_block_size];
+    vcodec_ec_read_coeffs(p_ctx->bitstream_reader, zigzag_block, dc_block_size * dc_block_size);
+    for (int y = 0; y < dc_block_size; y++) {
+        for (int x = 0; x < dc_block_size; x++) {
+            if (4 == dc_block_size) {
+                dc_block[y * dc_block_size + x] = zigzag_block[jpeg_zigzag_order4x4[x][y]];
+            } else {
+                dc_block[y * dc_block_size + x] = zigzag_block[jpeg_zigzag_order2x2[x][y]];
+            }
+            dc_block[y * dc_block_size + x] *= p_quant[y * block_size + x];
+            debug_printf("%3d ", dc_block[y * dc_block_size + x]);
+        }
+        debug_printf("\n");
+    }
     if (4 == dc_block_size) {
         ihadamard4x4(dc_block, dc_block);
     } else {
@@ -223,7 +241,7 @@ static vcodec_status_t read_frame_header(vcodec_dec_ctx_t *p_ctx, bool *p_is_key
     uint32_t val = 0;
     vcodec_bitstream_reader_getbits(p_ctx->bitstream_reader, &val, 1);
     *p_is_key_frame = (bool)val;
-    printf("FRM hdr %d\n", val);
+    //printf("FRM hdr %d\n", val);
     return vcodec_bitstream_reader_status(p_ctx->bitstream_reader);
 }
 
@@ -231,38 +249,6 @@ static vcodec_status_t read_macroblock_header(vcodec_dec_ctx_t *p_ctx, vcodec_pr
     uint32_t val;
     vcodec_bitstream_reader_getbits(p_ctx->bitstream_reader, &val, 2);
     *p_pred_mode = val;
-    printf("MB hdr %d\n", val);
+    //printf("MB hdr %d\n", val);
     return vcodec_bitstream_reader_status(p_ctx->bitstream_reader);
-}
-
-static vcodec_status_t read_coeffs(vcodec_dec_ctx_t *p_ctx, int *p_coeffs, int cnt) {
-    vcodec_status_t ret = VCODEC_STATUS_OK;
-    unsigned int sign_buffer;
-    int sign_buffer_size = 0;
-    memset(p_coeffs, 0, sizeof(int) * cnt);
-    uint32_t num_zeroes = 0;
-    num_zeroes = vcodec_bitstream_reader_read_exp_golomb(p_ctx->bitstream_reader);
-    printf("Read coefs num_zeroes %d\n", num_zeroes);
-    num_zeroes = (num_zeroes + cnt - 1) % cnt;
-    printf("Read coefs num_zeroes decoded %d\n", num_zeroes);
-    int num = cnt; // save cnt for later processing
-    // First zeroes run length might be equal to cnt, so that loop is never executed
-    cnt -= num_zeroes;
-    while (cnt > 0) {
-        uint32_t absval = vcodec_bitstream_reader_read_exp_golomb(p_ctx->bitstream_reader);
-        p_coeffs[cnt - 1] = absval + 1;
-        sign_buffer_size++;
-        cnt--;
-        num_zeroes = vcodec_bitstream_reader_read_exp_golomb(p_ctx->bitstream_reader);
-        cnt -= num_zeroes;
-    }
-    vcodec_bitstream_reader_getbits(p_ctx->bitstream_reader, &sign_buffer, sign_buffer_size);
-    while (num > 0) {
-        if (p_coeffs[num - 1] != 0) {
-            p_coeffs[num - 1] *= (sign_buffer & (1 << sign_buffer_size)) ? 1 : -1;
-            sign_buffer <<= 1;
-        }
-        num--;
-    }
-    return ret;
 }

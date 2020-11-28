@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(vcodec C)
 
-add_library(vcodec src/vcodec_common.c src/vcodec_dct.c src/vcodec_transform.c src/vcodec_decoder.c)
+add_library(vcodec src/vcodec_common.c src/vcodec_dct.c src/vcodec_transform.c src/vcodec_decoder.c src/vcodec_entropy_coding.c)
 target_include_directories(vcodec PUBLIC include)
 target_include_directories(vcodec PRIVATE src)
 target_compile_options(vcodec PRIVATE -ggdb3)

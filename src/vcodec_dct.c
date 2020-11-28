@@ -2,6 +2,7 @@
 #include "vcodec_common.h"
 #include "vcodec_transform.h"
 #include "vcodec/bitstream.h"
+#include "vcodec_entropy_coding.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -54,7 +55,6 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
 static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
 
 static void write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame);
-static void write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int count);
 static void write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode);
 
 vcodec_status_t vcodec_dct_init(vcodec_enc_ctx_t *p_ctx) {
@@ -197,7 +197,7 @@ static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame,
             debug_printf("\n");
 
             // Don't write the DC coefficient yet
-            write_coeffs(p_ctx, zigzag_block + 1, block_size * block_size - 1);
+            vcodec_ec_write_coeffs(p_ctx->bitstream_writer, zigzag_block + 1, block_size * block_size - 1);
 
             for (int i = 0; i < block_size; i++) {
                 // Copy transformed coefficients ditrcly into the macroblock (reference framebuffer)
@@ -271,17 +271,17 @@ static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_q
         for (int x = 0; x < dc_block_size; x++) {
             dc_block[y * dc_block_size + x] /= p_quant[y * block_size + x];
             if (4 == dc_block_size) {
-                zigzag_block[jpeg_zigzag_order4x4[x][y]] = dc_block[y * block_size + x];
+                zigzag_block[jpeg_zigzag_order4x4[x][y]] = dc_block[y * dc_block_size + x];
             } else {
-                zigzag_block[jpeg_zigzag_order2x2[x][y]] = dc_block[y * block_size + x];
+                zigzag_block[jpeg_zigzag_order2x2[x][y]] = dc_block[y * dc_block_size + x];
             }
-            debug_printf("%3d ", dc_block[y * block_size + x]);
-            dc_block[y * dc_block_size + x] *= p_quant[y * block_size + x];
+            debug_printf("%3d ", dc_block[y * dc_block_size + x]);
+            dc_block[y * dc_block_size + x] *= p_quant[y * dc_block_size + x];
         }
         debug_printf("\n");
     }
 
-    write_coeffs(p_ctx, zigzag_block, dc_block_size * dc_block_size);
+    vcodec_ec_write_coeffs(p_ctx->bitstream_writer, zigzag_block, dc_block_size * dc_block_size);
 
     if (4 == dc_block_size) {
         ihadamard4x4(dc_block, dc_block);
@@ -312,40 +312,4 @@ static void write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_m
     uint32_t val = pred_mode;
     //printf("MB hdr %d\n", val);
     vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, val, 2);
-}
-
-static void write_coeffs(vcodec_enc_ctx_t *p_ctx, const int *p_coeffs, int cnt) {
-    int zero_run_length = 0;
-    unsigned int sign_buffer = 0;
-    int sign_buffer_size = 0;
-    const int total = cnt;
-    cnt--;
-    while (cnt >= 0) {
-        if (0 == p_coeffs[cnt]) {
-            zero_run_length++;
-        } else {
-            // count of trailing zeroes is circle-shifted by one to allow for short one-bit code (1) to signify that the block is all-zeroes
-            // 1 trailing zero will be coded as 2 (2 -> 0011), 14 trailing zeroes for ac coeffs will be coded as 15
-            const int zrl_val = (zero_run_length + (sign_buffer_size == 0)) % total;
-            vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, zero_run_length);
-            //printf("zero_run_length %d %d\n", zero_run_length, zrl_val);
-            zero_run_length = 0;
-            // Save coefficient sign to write it later
-            sign_buffer |= p_coeffs[cnt] > 0;
-            sign_buffer <<= 1;
-            sign_buffer_size++;
-            // Write absolute coefficient value minus one (can't be zero)
-            vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, abs(p_coeffs[cnt]) - 1);
-            //printf("abs_val %d\n", abs(p_coeffs[cnt]) - 1);
-        }
-        cnt--;
-    }
-    if (total == zero_run_length) {
-        vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, 0);
-        return;
-    } else if (0 != zero_run_length) {
-        vcodec_bitstream_writer_write_exp_golomb(p_ctx->bitstream_writer, zero_run_length);
-    }
-
-    vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, sign_buffer, sign_buffer_size);
 }
