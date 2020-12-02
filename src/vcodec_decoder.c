@@ -97,7 +97,6 @@ static vcodec_status_t decode_key_frame(vcodec_dec_ctx_t *p_ctx, uint8_t *p_fram
         14,	13,	16,	24,
         14,	17,	22,	29,
     };
-    printf("Key frame\n");
     //printf("Key frame\n");
     int h = p_ctx->height / macroblock_size * macroblock_size;
     int y = 0;
@@ -191,7 +190,9 @@ static vcodec_status_t decode_macroblock_i(vcodec_dec_ctx_t *p_ctx, uint8_t *p_f
             debug_printf("(%3d) ", diff);
             sad += abs(diff);
         }
-        debug_printf("\n");
+        if (macroblock_size / block_size < 4) {
+            debug_printf("\n");
+        }
     }
     debug_printf("SAD = %d at %4d %4d\n", sad, macroblock_x, macroblock_y);
 }
@@ -208,7 +209,7 @@ static void decode_dc(vcodec_dec_ctx_t *p_ctx, int *p_macroblock, const int *p_q
             } else {
                 dc_block[y * dc_block_size + x] = zigzag_block[jpeg_zigzag_order2x2[x][y]];
             }
-            dc_block[y * dc_block_size + x] *= p_quant[y * block_size + x];
+            dc_block[y * dc_block_size + x] *= p_quant[0];
             debug_printf("%3d ", dc_block[y * dc_block_size + x]);
         }
         debug_printf("\n");
@@ -222,13 +223,11 @@ static void decode_dc(vcodec_dec_ctx_t *p_ctx, int *p_macroblock, const int *p_q
     for (int y = 0; y < dc_block_size; y++) {
         for (int x = 0; x < dc_block_size; x++) {
             dc_block[y * dc_block_size + x] /= 8;
-            debug_printf("%3d ", dc_block[y * dc_block_size + x]);
         }
-        debug_printf("\n");
     }
     for (int y = 0; y < dc_block_size; y++) {
         for (int x = 0; x < dc_block_size; x++) {
-            p_macroblock[y * dc_block_size * macroblock_size + x * dc_block_size] = dc_block[y * dc_block_size + x];
+            p_macroblock[y * block_size * macroblock_size + x * block_size] = dc_block[y * dc_block_size + x];
         }
     }
 }

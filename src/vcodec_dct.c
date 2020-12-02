@@ -108,7 +108,6 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
         14,	17,	22,	29,
     };
 
-    int prev_dc = 0;
     vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
     int h = p_ctx->height / macroblock_size * macroblock_size;
     int y = 0;
@@ -250,15 +249,8 @@ static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_q
     int dc_block[dc_block_size * dc_block_size];
     for (int y = 0; y < dc_block_size; y++) {
         for (int x = 0; x < dc_block_size; x++) {
-            dc_block[y * dc_block_size + x] = p_macroblock[y * dc_block_size * macroblock_size + x * dc_block_size];
+            dc_block[y * dc_block_size + x] = p_macroblock[y * block_size * macroblock_size + x * block_size];
         }
-    }
-    debug_printf("DC:\n");
-    for (int y = 0; y < dc_block_size; y++) {
-        for (int x = 0; x < dc_block_size; x++) {
-            debug_printf("%3d ", dc_block[y * block_size + x] / 16);
-        }
-        debug_printf("\n");
     }
     if (4 == dc_block_size) {
         hadamard4x4(dc_block, dc_block);
@@ -269,14 +261,14 @@ static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_q
     int zigzag_block[dc_block_size * dc_block_size];
     for (int y = 0; y < dc_block_size; y++) {
         for (int x = 0; x < dc_block_size; x++) {
-            dc_block[y * dc_block_size + x] /= p_quant[y * block_size + x];
+            dc_block[y * dc_block_size + x] /= p_quant[0];
             if (4 == dc_block_size) {
                 zigzag_block[jpeg_zigzag_order4x4[x][y]] = dc_block[y * dc_block_size + x];
             } else {
                 zigzag_block[jpeg_zigzag_order2x2[x][y]] = dc_block[y * dc_block_size + x];
             }
             debug_printf("%3d ", dc_block[y * dc_block_size + x]);
-            dc_block[y * dc_block_size + x] *= p_quant[y * dc_block_size + x];
+            dc_block[y * dc_block_size + x] *= p_quant[0];
         }
         debug_printf("\n");
     }
@@ -298,7 +290,7 @@ static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_q
     }
     for (int y = 0; y < dc_block_size; y++) {
         for (int x = 0; x < dc_block_size; x++) {
-            p_macroblock[y * dc_block_size * macroblock_size + x * dc_block_size] = dc_block[y * dc_block_size + x];
+            p_macroblock[y * block_size * macroblock_size + x * block_size] = dc_block[y * dc_block_size + x];
         }
     }
 }
