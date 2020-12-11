@@ -21,6 +21,14 @@ typedef struct {
     int gop_cnt;
 } vcodec_dct_ctx_t;
 
+typedef struct {
+    vcodec_block_partition_mode_t partition_mode;
+    vcodec_motion_prediction_mode_t motion_pred_mode;
+    vcodec_prediction_mode_t intra_pred_mode;
+    int mvx;
+    int mvy;
+} block_motion_vector_t;
+
 static const int jpeg_zigzag_order8x8[8][8] = {
   {  0,  1,  5,  6, 14, 15, 27, 28 },
   {  2,  4,  7, 13, 16, 26, 29, 42 },
@@ -52,10 +60,14 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
 static vcodec_status_t encode_p_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame);
 
 static void encode_macroblock_i(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
+static void encode_macroblock_p(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size);
 static void encode_dc(vcodec_enc_ctx_t *p_ctx, int *p_macroblock, const int *p_quant, int macroblock_size, int block_size);
 
 static void write_frame_header(vcodec_enc_ctx_t *p_ctx, bool is_key_frame);
 static void write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_mode_t pred_mode);
+static void write_p_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_motion_prediction_mode_t pred_mode, vcodec_prediction_mode_t intra_pred_mode);
+
+static int find_optimal_motion_vectors(vcodec_enc_ctx_t *p_ctx, int *p_block, int block_size, const uint8_t *p_frame, int x, int y, block_motion_vector_t *p_vectors, int *p_total_vectors);
 
 vcodec_status_t vcodec_dct_init(vcodec_enc_ctx_t *p_ctx) {
     if (0 == p_ctx->width || 0 == p_ctx->height) {
@@ -147,6 +159,37 @@ static vcodec_status_t encode_key_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *
 }
 
 static vcodec_status_t encode_p_frame(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame) {
+    const int macroblock_size = 16;
+    const int quant[4*4] = {
+        16,	11,	10,	16,
+        12,	12,	14,	19,
+        14,	13,	16,	24,
+        14,	17,	22,	29,
+    };
+
+    vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
+    int h = p_ctx->height / macroblock_size * macroblock_size;
+    int y = 0;
+    write_frame_header(p_ctx, false);
+    for (; y < h; y += macroblock_size) {
+        int x = 0;
+        for (; x < p_ctx->width; x += macroblock_size) {
+            encode_macroblock_p(p_ctx, p_frame, x, y, quant, macroblock_size);
+        }
+    }
+    int reduced_macroblock_size;
+    if ((p_ctx->height - y) % 8 == 0) {
+        reduced_macroblock_size = 8;
+    } else {
+        reduced_macroblock_size = 4;
+    }
+    for (; y < p_ctx->height; y += reduced_macroblock_size) {
+        int x = 0;
+        for (; x < p_ctx->width; x += reduced_macroblock_size) {
+            encode_macroblock_p(p_ctx, p_frame, x, y, quant, reduced_macroblock_size);
+        }
+    }
+
     return VCODEC_STATUS_OK;
 }
 
@@ -304,4 +347,111 @@ static void write_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_prediction_m
     uint32_t val = pred_mode;
     //printf("MB hdr %d\n", val);
     vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, val, 2);
+}
+
+static void write_p_macroblock_header(vcodec_enc_ctx_t *p_ctx, vcodec_motion_prediction_mode_t pred_mode, vcodec_prediction_mode_t intra_pred_mode) {
+    vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, (uint32_t)pred_mode, 2);
+    if (VCODEC_MOTION_PREDICTION_MODE_INTRA == pred_mode) {
+        vcodec_bitstream_writer_putbits(p_ctx->bitstream_writer, (uint32_t)intra_pred_mode, 2);
+    }
+}
+
+static void encode_macroblock_p(vcodec_enc_ctx_t *p_ctx, const uint8_t *p_frame, int macroblock_x, int macroblock_y, const int *p_quant, int macroblock_size) {
+    const int block_size = 4;
+    vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
+    int macroblock[macroblock_size * macroblock_size];
+    int mvx;
+    int mvy;
+    int sad;
+    vcodec_prediction_mode_t intra_pred_mode;
+    const vcodec_motion_prediction_mode_t pred_mode = vcodec_predict_motion_block(macroblock, p_dct_ctx->p_ref_frame, macroblock_x, macroblock_y,
+            p_frame, p_ctx->width, macroblock_size, &mvx, &mvy, &sad, &intra_pred_mode);
+    debug_printf("Block predicted with %d:\n", pred_mode);
+    for (int i = 0; i < macroblock_size; i++) {
+        for (int j = 0; j < macroblock_size; j++) {
+            debug_printf("%4d, ", macroblock[i * block_size + j]);
+        }
+        debug_printf("\n");
+    }
+    const int min_block_size = 4;
+    const int max_vectors_count = (macroblock_size / min_block_size) * (macroblock_size / min_block_size);
+    block_motion_vector_t vectors[max_vectors_count];
+    memset(vectors, 0, sizeof(vectors));
+    int total_vectors = 0;
+    const int result_sad = find_optimal_motion_vectors(p_ctx, macroblock, macroblock_size, p_frame, macroblock_x, macroblock_y, vectors, &total_vectors);
+}
+
+/**
+ * Recirsively find  motion vectors with optimal block partition and save the result into @c p_vectors.
+ * @return Total SAD.
+ */
+static int find_optimal_motion_vectors(vcodec_enc_ctx_t *p_ctx, int *p_block, int block_size, const uint8_t *p_frame, int x, int y, block_motion_vector_t *p_vectors, int *p_total_vectors) {
+    vcodec_dct_ctx_t *p_dct_ctx = p_ctx->encoder_ctx;
+    int whole_block_sad = 0;
+    block_motion_vector_t whole_block_vector = {
+        .partition_mode = VCODEC_BLOCK_PARTITION_MODE_NONE,
+    };
+    const vcodec_motion_prediction_mode_t whole_pred_mode = vcodec_predict_motion_block(p_block, p_dct_ctx->p_ref_frame, x, y,
+            p_frame, p_ctx->width, block_size, &whole_block_vector.mvx, &whole_block_vector.mvy, &whole_block_sad, &whole_block_vector.intra_pred_mode);
+
+    if (4 == block_size) {
+        memcpy(p_vectors, &whole_block_vector, sizeof(whole_block_vector));
+        *p_total_vectors = 1;
+        return whole_block_sad;
+    }
+
+    const int min_block_size = 4;
+    const int max_vectors_count = (block_size / min_block_size) * (block_size / min_block_size);
+    block_motion_vector_t sub_vectors[max_vectors_count];
+    int vectors_written = 0;
+    int total_vectors = 0;
+    const int sub_block_size = block_size / 2;
+
+    int sub_block_top_left[sub_block_size * sub_block_size];
+    int sub_block_top_right[sub_block_size * sub_block_size];
+    int sub_block_bottom_left[sub_block_size * sub_block_size];
+    int sub_block_bottom_right[sub_block_size * sub_block_size];
+
+    int sub_block_sad = 0;
+    sub_block_sad += find_optimal_motion_vectors(p_ctx, sub_block_top_left, sub_block_size, p_frame, x, y, sub_vectors, &vectors_written);
+    total_vectors += vectors_written;
+    if (sub_block_sad >= whole_block_sad) {
+        goto finish;
+    }
+    sub_block_sad += find_optimal_motion_vectors(p_ctx, sub_block_top_right, sub_block_size, p_frame, x + sub_block_size, y, sub_vectors + total_vectors, &vectors_written);
+    total_vectors += vectors_written;
+    if (sub_block_sad >= whole_block_sad) {
+        goto finish;
+    }
+    sub_block_sad += find_optimal_motion_vectors(p_ctx, sub_block_bottom_left, sub_block_size, p_frame, x, y + sub_block_size, sub_vectors + total_vectors, &vectors_written);
+    total_vectors += vectors_written;
+    if (sub_block_sad >= whole_block_sad) {
+        goto finish;
+    }
+    sub_block_sad += find_optimal_motion_vectors(p_ctx, sub_block_bottom_right, sub_block_size, p_frame, x + sub_block_size, y + sub_block_size, sub_vectors + total_vectors, &vectors_written);
+    total_vectors += vectors_written;
+
+ finish:
+    if (whole_block_sad < sub_block_sad) {
+        memcpy(p_vectors, &whole_block_vector, sizeof(whole_block_vector));
+        *p_total_vectors = 1;
+        return whole_block_sad;
+    } else {
+        p_vectors[0].partition_mode = VCODEC_BLOCK_PARTITION_MODE_QUAD;
+        memcpy(p_vectors + 1, sub_vectors, sizeof(block_motion_vector_t) * total_vectors);
+        *p_total_vectors = total_vectors + 1;
+        for (int i = 0; i < sub_block_size; i++) {
+            memcpy(p_block + i * block_size, sub_block_top_left + i * sub_block_size, sub_block_size);
+        }
+        for (int i = 0; i < sub_block_size; i++) {
+            memcpy(p_block + i * block_size + sub_block_size, sub_block_top_right + i * sub_block_size, sub_block_size);
+        }
+        for (int i = 0; i < sub_block_size; i++) {
+            memcpy(p_block + (i + sub_block_size) * block_size, sub_block_bottom_left + i * sub_block_size, sub_block_size);
+        }
+        for (int i = 0; i < sub_block_size; i++) {
+            memcpy(p_block + (i + sub_block_size) * block_size + sub_block_size, sub_block_bottom_left + i * sub_block_size, sub_block_size);
+        }
+        return sub_block_sad;
+    }
 }

@@ -201,3 +201,98 @@ void vcodec_unpredict_block(int *reconstructed, const uint8_t *p_ref_frame, int 
         break;
     }
 }
+
+static int compute_motion_block_sad(const uint8_t *p_source_frame, const uint8_t *p_ref_frame, int x, int y, int mvx, int mvy, int block_size, int frame_width) {
+    int diff = 0;
+    for (int i = y; i < y + block_size; i++) {
+        for (int j = x; j < x + block_size; j++) {
+            diff += abs(p_source_frame[i * frame_width + j] - p_ref_frame[(i + mvy) * frame_width + j + mvx]);
+        }
+    }
+    return diff;
+}
+
+/**
+ * Find best matching position from 9 points.
+ * @param[in] p_ref_frame    Reference frame buffer.
+ * @param[in] p_source_frame Source frame buffer
+ * @param[in] x              Block center position (x) in pixels.
+ * @param[in] y              Block center position (y) in pixels.
+ * @param[in] frame_width    Source/reference frame width.
+ * @param[in] block_size     Block width in pixels.
+ * @param[in] p_mvx          Resulting vector on y axis.
+ * @param[in] p_mvy          Resulting vector on y axis.
+ *
+ * @retval SAD for the resulting motion vector.
+ */
+int vcodec_match_block_tss(const uint8_t *p_ref_frame, const uint8_t *p_source_frame, int x, int y,
+        int frame_width, int block_size, int *p_mvx, int *p_mvy, compute_motion_block_cost_t cost_function) {
+    int sad_min = INT_MAX;
+    int mvx_min = 0;
+    int mvy_min = 0;
+
+    *p_mvx = 0;
+    *p_mvy = 0;
+
+    for (int step_size = block_size; step_size > 0; step_size /= 2) {
+        for (int i = -step_size; i < step_size + 1; i += step_size) {
+            for (int j = -step_size; j < step_size + 1; j += step_size) {
+                const int mvx = *p_mvx + j;
+                const int mvy = *p_mvy + i;
+                const int sad = cost_function(p_source_frame, p_ref_frame, x, y, mvx, mvy, block_size, frame_width);
+                if (sad < sad_min) {
+                    sad_min = sad;
+                    mvx_min = mvx;
+                    mvy_min = mvy;
+                }
+            }
+        }
+        *p_mvx = mvx_min;
+        *p_mvy = mvy_min;
+    }
+    return sad_min;
+}
+
+vcodec_motion_prediction_mode_t vcodec_predict_motion_block(int *prediction, const uint8_t *p_ref_frame, int x, int y,
+        const uint8_t *p_source_frame, int frame_width, int block_size, int *p_mvx, int *p_mvy, int *p_sad, vcodec_prediction_mode_t *p_intra_mode) {
+    const vcodec_prediction_mode_t intra_pred = vcodec_predict_block(prediction, p_ref_frame, x, y, p_source_frame, frame_width, block_size);
+    const int intra_pred_diff = compute_block_sum(prediction, block_size);
+    const int inter_pred_diff = vcodec_match_block_tss(p_ref_frame, p_source_frame, x, y, frame_width, block_size, p_mvx, p_mvy, compute_motion_block_sad);
+    if (inter_pred_diff < intra_pred_diff) {
+        *p_sad = inter_pred_diff;
+        for (int i = 0; i < block_size; i++) {
+            for (int j = 0; j < block_size; j++) {
+                prediction[i * block_size + j] = p_source_frame[(i + y) * frame_width + j + x]
+                    - p_ref_frame[(i + y + *p_mvy) * frame_width + j + x + *p_mvx];
+            }
+        }
+        return VCODEC_MOTION_PREDICTION_MODE_MV;
+    } else {
+        *p_sad = inter_pred_diff;
+        *p_intra_mode = intra_pred;
+        return VCODEC_MOTION_PREDICTION_MODE_INTRA;
+    }
+}
+
+void vcodec_unpredict_motion_block(int *reconstructed, const uint8_t *p_ref_frame, int x, int y,
+        int block_size, int frame_width, vcodec_motion_prediction_mode_t pred_mode, vcodec_prediction_mode_t intra_pred_mode, int mvx, int mvy) {
+    switch (pred_mode) {
+        case VCODEC_MOTION_PREDICTION_MODE_SKIP:
+            for (int i = 0; i < block_size; i++) {
+                for (int j = 0; j < block_size; j++) {
+                    reconstructed[i * block_size + j] = p_ref_frame[(i + y + mvy) * frame_width + j + x + mvx];
+                }
+            }
+            break;
+        case VCODEC_MOTION_PREDICTION_MODE_INTRA:
+            vcodec_unpredict_block(reconstructed, p_ref_frame, x, y, block_size, frame_width, pred_mode);
+            break;
+        case VCODEC_MOTION_PREDICTION_MODE_MV:
+            for (int i = 0; i < block_size; i++) {
+                for (int j = 0; j < block_size; j++) {
+                    reconstructed[i * block_size + j] += p_ref_frame[(i + y + mvy) * frame_width + j + x + mvx];
+                }
+            }
+            break;
+    }
+}
