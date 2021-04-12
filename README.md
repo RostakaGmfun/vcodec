@@ -19,3 +19,5 @@ Decoding:
 ```
 
 You can play Y4M files with `ffplay`, for example.
+
+Compression ratio/PSNR are still to bad to brag about it.
