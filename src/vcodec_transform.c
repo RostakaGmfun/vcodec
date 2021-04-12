@@ -1,5 +1,7 @@
 /**
- * Integer transform and hadamard transform implementation from reference H.264 implementation.
+ * Integer transform and hadamard transform implementation from reference H.264 "JM" implementation.
+ * author: Alexis Michael Tourapis
+ * Modified by RostakaGmfun to fit into the vcodec code.
  */
 
 void forward4x4(int *tblock, const int *block)
