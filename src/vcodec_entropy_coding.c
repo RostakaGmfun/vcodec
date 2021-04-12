@@ -33,10 +33,13 @@ vcodec_status_t vcodec_ec_read_coeffs(vcodec_bitstream_reader_t *p_bitstream_rea
     const int num_coeffs = count;
     while (count > 0) {
         num_zeroes = vcodec_bitstream_reader_read_exp_golomb(p_bitstream_reader);
-        for (int i = count; i > 0; i--) {
-            p_coeffs[i - 1] = 0;
+        if (count < num_zeroes) {
+            return VCODEC_STATUS_INVAL;
         }
-        count -= num_zeroes;
+        for (int i = 0; i < num_zeroes; i++) {
+            p_coeffs[count - 1] = 0;
+            count--;
+        }
         if (count == 0) {
             break;
         }

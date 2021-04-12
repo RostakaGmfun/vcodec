@@ -1,3 +1,4 @@
+# vcodec
 `vcodec_dct` is a toy codec based on ideas of AVC (H.264) standard, but with lots of simplifications, luma only,
 because it is developed *just for fun*.
 
@@ -9,12 +10,12 @@ The inter-frame compression (mostly motion prediction) is WIP, and I hope to fin
 
 Encoding:
 ```bash
-./vcodec-test <path-to-Y4M-luma-only-raw-video> > <path-to-encoded-output>
+./vcodec-test /path/to/Y4M-luma-only-raw-video > /path/to/encoded-output
 ```
 
 Decoding:
 ```bash
-./vcodec-dec-test <path-to-encoded-output> > <path-to-decoded-y4m-file>
+./vcodec-dec-test /path/to/encoded-file > /path/to/decoded-y4m
 ```
 
-You can play the Y4M files with `ffplay`, for example.
+You can play Y4M files with `ffplay`, for example.

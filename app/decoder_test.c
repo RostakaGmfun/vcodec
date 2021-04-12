@@ -20,7 +20,11 @@ static vcodec_status_t vcodec_read(uint8_t *p_data, uint32_t size, uint32_t *siz
     io_ctx_t *p_io_ctx = ctx;
     int read = fread(p_data, 1, size, p_io_ctx->out_file);
     if (read <= 0) {
-        return VCODEC_STATUS_IO_FAILED;
+        if (feof(p_io_ctx->out_file)) {
+            return VCODEC_STATUS_EOF;
+        } else {
+            return VCODEC_STATUS_IO_FAILED;
+        }
     }
     *size_read = read;
 
